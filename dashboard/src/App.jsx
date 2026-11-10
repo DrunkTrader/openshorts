@@ -850,7 +850,10 @@ function App() {
             setStatus('error');
             const errorMsg = data.error || (data.logs && data.logs.length > 0 ? data.logs[data.logs.length - 1] : "Process failed");
             setJobError(readableError(errorMsg));
-            setLogs(prev => [...prev, "Error: " + errorMsg]);
+            // Keep the failing response's own lines: they place the stage and
+            // belong in Raw logs.
+            setLogs(data.logs?.length ? [...data.logs, "Error: " + errorMsg] : (prev => [...prev, "Error: " + errorMsg]));
+            if (data.logs?.length) setLogTimes(data.log_times || []);
             clearInterval(interval);
             refreshMe();
           } else {

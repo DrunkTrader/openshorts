@@ -15,7 +15,7 @@ export const STAGES = [
 export const MARKERS = [
   // main.py: "🔥 Found N clips!", "Processing Clip N", "Clip N framed|ready",
   // "Choosing a layout", app.py reads CLIP_READY lines.
-  { stage: 'rendering', re: /Found \d+ (?:viral )?clips|Processing Clip \d+|Clip \d+ (?:framed|ready)|Choosing a layout|CLIP_READY|Using the clips Gemini picked/ },
+  { stage: 'rendering', re: /Found \d+ (?:viral )?clips|Processing Clip \d+|Clip \d+ (?:framed|ready)|Choosing (?:a|the) layout|CLIP_READY|ranges: \d+ pieces?|\d+\/\d+ pieces downloaded|piece\(s\) missing|Using the clips Gemini picked/ },
   // main.py "Analyzing with Gemini|local LLM", "Built N scoring window(s)",
   // "Silent video — analyzing with Gemini vision".
   { stage: 'scoring', re: /Analyzing with (?:Gemini|local LLM)|Finding the best moments|Built \d+ scoring window|Silent video|finding moments in the picture/ },
@@ -23,7 +23,7 @@ export const MARKERS = [
   // downloaded", "Audio ready ahead of the video", "Transcribing… N%",
   // "Transcribing video|audio", "Detected language", "Waiting for a free
   // transcription slot".
-  { stage: 'transcribing', re: /Download attempt|\[download\]|Downloading video|Video downloaded|Audio ready|Transcrib|Detected language|Reusing precomputed transcript/ },
+  { stage: 'transcribing', re: /Download attempt|\[download\]|Downloading video|Video downloaded|Audio ready|Transcrib|Detected language|Reusing precomputed transcript|Job started/ },
 ];
 
 const rank = (id) => STAGES.findIndex((s) => s.id === id);
@@ -65,9 +65,22 @@ export function deriveStage({ status, logs = [], queue = null } = {}) {
       if (/Clip \d+ ready|CLIP_READY/.test(l)) ready += 1;
     }
     clips = { ready, total };
-    detail = total ? `${ready} of ${total} clips ready` : 'Cutting and reframing';
+    let fetched = null;
+    for (const l of logs) {
+      const m = /(\d+)\/(\d+) pieces downloaded/.exec(l);
+      if (m) fetched = m;
+      const r = /ranges: (\d+) pieces?/.exec(l);
+      if (r && !fetched) fetched = [null, '0', r[1]];
+    }
+    detail = ready === 0 && fetched && fetched[1] !== fetched[2]
+      ? `Fetching clip footage ${fetched[1]}/${fetched[2]}`
+      : total ? `${ready} of ${total} clips ready` : 'Cutting and reframing';
   } else if (stage === 'done') {
     detail = 'All clips ready';
+  }
+  if (stage === 'transcribing' && /free transcription slot/.test(tail)) {
+    stage = 'queued';
+    detail = 'Waiting for a free transcription slot';
   }
   if (failed) detail = tail ? tail.replace(/^Error:\s*/, '').slice(0, 120) : 'Failed';
   return { stage, index: rank(stage), failed, detail, pct, clips };
