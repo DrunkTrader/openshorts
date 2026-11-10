@@ -104,7 +104,7 @@ const ClipCard = forwardRef(function ClipCard(
   const pinned = useRef(false);
   const canHover = useMedia('(hover: hover)');
   const reduced = useMedia('(prefers-reduced-motion: reduce)');
-  const [near, setNear] = useState(false);
+  const [wantPeaks, setWantPeaks] = useState(false);
   const [peaks, setPeaks] = useState(null);
   const [scenes, setScenes] = useState([]);
   const [duration, setDuration] = useState(0);
@@ -112,26 +112,27 @@ const ClipCard = forwardRef(function ClipCard(
   const [playing, setPlaying] = useState(false);
   const scenesAsked = useRef(false);
 
-  // Off-screen: pause, and only then decode peaks (one clip at a time).
+  // Off-screen: pause. Peaks are decoded only on intent (hover, focus, tap),
+  // so a page of cards never downloads every clip a second time.
   useEffect(() => {
     const box = boxRef.current;
-    if (!box || typeof IntersectionObserver === 'undefined') { setNear(true); return undefined; }
+    if (!box || typeof IntersectionObserver === 'undefined') return undefined;
     const io = new IntersectionObserver(([e]) => {
-      if (e.isIntersecting) setNear(true);
-      else videoRef.current?.pause();
+      if (!e.isIntersecting) videoRef.current?.pause();
     }, { threshold: 0.25 });
     io.observe(box);
     return () => io.disconnect();
   }, []);
 
   useEffect(() => {
-    if (!near || !src) return undefined;
+    if (!wantPeaks || !src) return undefined;
     let alive = true;
     loadPeaks(src).then((p) => { if (alive) setPeaks(p); });
     return () => { alive = false; };
-  }, [near, src]);
+  }, [wantPeaks, src]);
 
   const askScenes = useCallback(() => {
+    setWantPeaks(true);
     if (!sceneSource || scenesAsked.current) return;
     scenesAsked.current = true;
     apiJson(`/api/clip/${sceneSource.jobId}/${sceneSource.index}/scenes`)

@@ -7,10 +7,12 @@ const cache = new Map();
 let chain = Promise.resolve();
 
 async function compute(url, bars) {
+  // Size probe first: an unknown or oversize file is never downloaded twice.
+  const head = await fetch(url, { method: 'HEAD' });
+  const len = Number(head.headers.get('content-length')) || 0;
+  if (!head.ok || !len || len > MAX_BYTES) return null;
   const res = await fetch(url);
   if (!res.ok) return null;
-  const len = Number(res.headers.get('content-length')) || 0;
-  if (len > MAX_BYTES) return null;
   const buf = await res.arrayBuffer();
   if (buf.byteLength > MAX_BYTES) return null;
   const Ctx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
