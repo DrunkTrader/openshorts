@@ -5,6 +5,10 @@ import MediaInput from './components/MediaInput';
 import McpConnectCard from './components/McpConnectCard';
 import ResultCard from './components/ResultCard';
 import ProcessingAnimation from './components/ProcessingAnimation';
+import StatusChip from './components/StatusChip';
+import JobTimeline from './components/JobTimeline';
+import Skeleton from './components/ui/Skeleton';
+import { deriveStage } from './lib/jobStage';
 // import Gallery from './components/Gallery';
 import ThumbnailStudio from './components/ThumbnailStudio';
 import SaaShortsTab from './components/SaaShortsTab';
@@ -367,11 +371,16 @@ function App() {
   const [logs, setLogs] = useState([]);
   // When each server log line arrived (epoch s, parallel to logs), from /api/status.
   const [logTimes, setLogTimes] = useState([]);
-  // Collapsed on phones: the log tail is the least useful thing on a 360px
-  // screen and it was pushing the actual clips a full scroll down.
-  const [logsVisible, setLogsVisible] = useState(() => {
-    try { return window.innerWidth >= 768; } catch { return true; }
-  });
+  // Server-side job state (queued | processing | completed | failed): the
+  // timeline needs it, the local `status` only knows processing/complete/error.
+  const [serverStatus, setServerStatus] = useState('queued');
+  // The last submitted request, so the error state can offer a real Retry.
+  const lastRequestRef = useRef(null);
+  const jobInfo = useMemo(() => deriveStage({
+    status: status === 'complete' ? 'completed' : status === 'error' ? 'failed' : serverStatus,
+    logs,
+    queue: queueInfo,
+  }), [status, serverStatus, logs, queueInfo]);
   const [processingMedia, setProcessingMedia] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard'); // dashboard, settings
   // Mobile only: the full nav lives in a drawer behind the header's menu button.
@@ -829,6 +838,7 @@ function App() {
           }
 
           if (data.partial) setPartialJob(data.partial);
+          setServerStatus(data.status);
           setQueueInfo(data.status === 'queued' && data.queue ? data.queue : null);
 
           if (data.status === 'completed') {
@@ -1111,6 +1121,8 @@ function App() {
     }
     // Past every gate, so this request is really running: nothing left to resume.
     clearPendingJob();
+    lastRequestRef.current = { data, forceLowQuality };
+    setServerStatus('queued');
     setStatus('processing');
     setJobError('');
     setLogs(["Starting process..."]);
@@ -2124,12 +2136,7 @@ function App() {
                     <Activity className={`text-brass ${status === 'processing' ? 'animate-pulse' : ''}`} size={18} />
                     Live Analysis
                   </h2>
-                  <span className={status === 'processing' ? 'badge-brass' :
-                    status === 'complete' ? 'badge-ok' :
-                      'badge-danger'
-                    }>
-                    {status.toUpperCase()}
-                  </span>
+                  <StatusChip stage={jobInfo.stage} failed={jobInfo.failed} />
                 </div>
 
                 {/* Trimmed run: say it while it renders, not only once the
@@ -2175,18 +2182,7 @@ function App() {
                   />
                 )}
 
-                {/* Phones only. The scan box drops its invented telemetry at
-                    this size and the log terminal below starts collapsed, so
-                    without this the screen would say nothing about what the job
-                    is actually doing. The log tail is the real answer. */}
-                {status === 'processing' && (
-                  <div className="sm:hidden mb-3 flex items-start gap-2 text-xs text-ink2 min-w-0">
-                    <Loader2 size={14} className="animate-spin text-brass shrink-0 mt-px" />
-                    <span className="min-w-0 leading-snug break-words">
-                      {logs.length ? logs[logs.length - 1] : 'starting up…'}
-                    </span>
-                  </div>
-                )}
+                <JobTimeline info={jobInfo} />
 
                 {/* The render is dead time: the user is watching a progress bar
                     with nothing to do, so this is where the one star ask goes. */}
@@ -2196,40 +2192,26 @@ function App() {
                   </div>
                 )}
 
-                {/* Logs Terminal */}
-                <div className={`bg-paper rounded-card border border-rule overflow-hidden flex flex-col transition-all duration-500 ${status === 'complete' ? `min-h-0 opacity-50 hover:opacity-100 ${logsVisible ? 'h-32' : 'h-auto'}` : `flex-1 ${logsVisible ? 'min-h-[160px] sm:min-h-[200px]' : 'min-h-0 flex-none'}`}`}>
-                  <button
-                    type="button"
-                    onClick={() => setLogsVisible(!logsVisible)}
-                    aria-expanded={logsVisible}
-                    className="w-full px-3.5 sm:px-4 py-2.5 border-b border-rule flex items-center justify-between gap-2 bg-paper2 shrink-0 text-left"
-                  >
-                    <span className="readout flex items-center gap-2">
-                      <Terminal size={12} /> System Logs
-                    </span>
+                {/* Raw logs: native <details>, collapsed, Enter/Space toggle. */}
+                <details className="group/logs rounded-card border border-rule bg-paper overflow-hidden">
+                  <summary className="px-3.5 sm:px-4 py-2.5 flex items-center justify-between gap-2 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden bg-paper2">
+                    <span className="readout flex items-center gap-2"><Terminal size={12} /> Raw logs</span>
                     <span className="flex items-center gap-2 text-muted">
-                      {!logsVisible && logs.length > 0 && (
-                        <span className="readout normal-case">{logs.length}</span>
-                      )}
-                      <ChevronDown size={16} className={logsVisible ? '' : 'rotate-180'} />
+                      {logs.length > 0 && <span className="readout normal-case tabular">{logs.length}</span>}
+                      <ChevronDown size={16} className="transition-transform duration-200 group-open/logs:rotate-180" />
                     </span>
-                  </button>
-                  {logsVisible && (
-                    <div className="flex-1 p-3.5 sm:p-4 overflow-y-auto font-mono text-[11px] sm:text-xs space-y-1.5 custom-scrollbar text-muted break-words">
-                      {logs.map((log, i) => (
-                        <div key={i} className={`flex gap-2 ${log.toLowerCase().includes('error') ? 'text-danger' : 'text-muted'}`}>
-                          <span className="text-muted opacity-50 shrink-0 hidden sm:inline tabular-nums">
-                            {logTimes[i] ? new Date(logTimes[i] * 1000).toLocaleTimeString() : ''}
-                          </span>
-                          <span className="min-w-0 break-words">{log}</span>
-                        </div>
-                      ))}
-                      {status === 'processing' && (
-                        <div className="animate-pulse text-brass">_</div>
-                      )}
-                    </div>
-                  )}
-                </div>
+                  </summary>
+                  <div className="max-h-64 p-3.5 sm:p-4 overflow-y-auto font-mono text-[11px] sm:text-xs space-y-1.5 custom-scrollbar text-muted break-words border-t border-rule">
+                    {logs.map((log, i) => (
+                      <div key={i} className={`flex gap-2 ${log.toLowerCase().includes('error') ? 'text-danger' : 'text-muted'}`}>
+                        <span className="text-muted opacity-50 shrink-0 hidden sm:inline tabular-nums">
+                          {logTimes[i] ? new Date(logTimes[i] * 1000).toLocaleTimeString() : ''}
+                        </span>
+                        <span className="min-w-0 break-words">{log}</span>
+                      </div>
+                    ))}
+                  </div>
+                </details>
               </div>
 
               {/* Right Panel: Results Grid */}
@@ -2431,16 +2413,29 @@ function App() {
                     </div>
                   ) : (
                     status === 'processing' ? (
-                      <div className="h-full min-h-[140px] flex flex-col items-center justify-center text-muted space-y-3 text-center px-4">
-                        <Loader2 size={28} className="animate-spin text-brass" />
-                        <p className="text-sm lowercase">Waiting for clips...</p>
-                        <p className="text-xs text-muted/80 max-w-[26ch] leading-snug">
-                          They appear here one by one as each finishes rendering.
-                        </p>
+                      <div className="grid gap-4 pb-10 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true" aria-label="Waiting for clips">
+                        {[0, 1, 2].map((n) => (
+                          <div key={n} className="card overflow-hidden" style={{ opacity: 1 - n * 0.25 }}>
+                            <Skeleton className="aspect-[9/16] !rounded-none" />
+                            <div className="p-4 space-y-2">
+                              <Skeleton className="h-4 w-3/4" />
+                              <Skeleton className="h-3 w-1/2" />
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     ) : status === 'error' ? (
-                      <div className="h-full min-h-[120px] flex flex-col items-center justify-center text-danger space-y-2">
-                        <p>Generation failed.</p>
+                      <div role="alert" className="h-full min-h-[200px] flex flex-col items-start justify-center gap-3 px-2">
+                        <h3 className="font-display text-3xl text-ink">That run did not finish.</h3>
+                        <p className="text-sm text-muted max-w-md">{jobError || 'Something stopped the job before any clip was ready.'}</p>
+                        <div className="flex gap-2 mt-1">
+                          {lastRequestRef.current && (
+                            <button type="button" className="btn-primary px-4 py-2 text-sm" onClick={() => handleProcess(lastRequestRef.current.data, lastRequestRef.current.forceLowQuality)}>
+                              Retry
+                            </button>
+                          )}
+                          <button type="button" className="btn-ghost px-4 py-2 text-sm" onClick={handleReset}>Start over</button>
+                        </div>
                       </div>
                     ) : null
                   )}
