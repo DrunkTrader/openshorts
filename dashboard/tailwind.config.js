@@ -1,5 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 export default {
+  darkMode: ['selector', '[data-theme="dark"]'],
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
@@ -7,25 +8,25 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Lumen · Night Foundry — values mirror tokens.css (kept literal so
-        // Tailwind alpha modifiers like bg-brass/10 compile)
-        paper: "oklch(13% 0.014 265 / <alpha-value>)",
-        paper2: "oklch(16.5% 0.015 265 / <alpha-value>)",
-        paper3: "oklch(20% 0.016 265 / <alpha-value>)",
-        ink: "oklch(96% 0.006 262 / <alpha-value>)",
-        ink2: "oklch(86% 0.01 262 / <alpha-value>)",
-        muted: "oklch(64% 0.012 262 / <alpha-value>)",
-        brass: "oklch(76% 0.17 50 / <alpha-value>)",
-        brassink: "oklch(17% 0.03 50 / <alpha-value>)",
-        coral: "oklch(68% 0.16 18 / <alpha-value>)",
-        ok: "oklch(75% 0.11 150 / <alpha-value>)",
-        warn: "oklch(78% 0.14 75 / <alpha-value>)",
-        danger: "oklch(66% 0.18 25 / <alpha-value>)",
+        // channel-backed (tokens.css) so alpha modifiers like bg-brass/10 compile
+        // and every colour flips with the theme
+        paper: "oklch(var(--c-paper) / <alpha-value>)",
+        paper2: "oklch(var(--c-paper-2) / <alpha-value>)",
+        paper3: "oklch(var(--c-paper-3) / <alpha-value>)",
+        ink: "oklch(var(--c-ink) / <alpha-value>)",
+        ink2: "oklch(var(--c-ink-2) / <alpha-value>)",
+        muted: "oklch(var(--c-muted) / <alpha-value>)",
+        brass: "oklch(var(--c-accent) / <alpha-value>)",
+        brassink: "oklch(var(--c-accent-ink) / <alpha-value>)",
+        coral: "oklch(var(--c-accent-2) / <alpha-value>)",
+        ok: "oklch(var(--c-ok) / <alpha-value>)",
+        warn: "oklch(var(--c-warn) / <alpha-value>)",
+        danger: "oklch(var(--c-danger) / <alpha-value>)",
         // legacy aliases so untouched files degrade gracefully
-        background: "oklch(13% 0.014 265 / <alpha-value>)",
-        surface: "oklch(16.5% 0.015 265 / <alpha-value>)",
-        primary: "oklch(76% 0.17 50 / <alpha-value>)",
-        accent: "oklch(68% 0.16 18 / <alpha-value>)",
+        background: "oklch(var(--c-paper) / <alpha-value>)",
+        surface: "oklch(var(--c-paper-2) / <alpha-value>)",
+        primary: "oklch(var(--c-accent) / <alpha-value>)",
+        accent: "oklch(var(--c-accent-2) / <alpha-value>)",
       },
       fontFamily: {
         display: "var(--font-display)",
@@ -39,8 +40,13 @@ export default {
         rule2: "var(--color-rule-2)",
       },
       borderRadius: {
+        sm: "var(--radius-sm)",
         card: "var(--radius-card)",
         input: "var(--radius-input)",
+      },
+      boxShadow: {
+        card: "var(--shadow-card)",
+        pop: "var(--shadow-pop)",
       },
       fontSize: {
         micro: ["10.5px", { letterSpacing: "0.10em" }],
