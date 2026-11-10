@@ -27,6 +27,8 @@ import AdvancedBanner from './components/AdvancedBanner';
 import HistoryTab from './components/HistoryTab';
 import AutopilotTab from './components/AutopilotTab';
 import ProfileMenu from './components/ProfileMenu';
+import Chip from './components/ui/Chip';
+import Button from './components/ui/Button';
 import ThemeToggle from './components/ui/ThemeToggle';
 import Modal from './components/ui/Modal';
 import { useAuth } from './contexts/AuthContext';
@@ -1322,32 +1324,36 @@ function App() {
     <>
       <a
         href="#landing"
-        className="flex items-center gap-2 px-3 py-2 text-xs lowercase text-muted hover:text-ink2 transition-colors"
+        aria-label="Landing page"
+        className={`flex items-center gap-2 px-3 py-2 text-xs text-muted hover:text-ink transition-colors duration-150 rounded-input ${collapsed ? 'justify-center lg:justify-start' : ''}`}
       >
         <Globe size={14} className="shrink-0" />
-        <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>landing page</span>
+        <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>Landing page</span>
       </a>
       <a
         href="https://github.com/mutonby/openshorts"
         target="_blank"
         rel="noopener noreferrer"
-        className="flex items-center gap-2 px-3 py-2 text-xs lowercase text-muted hover:text-ink2 transition-colors"
+        aria-label="Open source on GitHub"
+        className={`flex items-center gap-2 px-3 py-2 text-xs text-muted hover:text-ink transition-colors duration-150 rounded-input ${collapsed ? 'justify-center lg:justify-start' : ''}`}
       >
         <svg height="14" viewBox="0 0 16 16" version="1.1" width="14" aria-hidden="true" fill="currentColor" className="shrink-0"><path fillRule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
-        <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>open source</span>
+        <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>Open source</span>
       </a>
       {billingEnabled && (
         <a
           href="#/pricing"
-          className="flex items-center gap-2 px-3 py-2 text-xs lowercase text-muted hover:text-ink2 transition-colors"
+          aria-label="Plans and pricing"
+          className={`flex items-center gap-2 px-3 py-2 text-xs text-muted hover:text-ink transition-colors duration-150 rounded-input ${collapsed ? 'justify-center lg:justify-start' : ''}`}
         >
           <Sparkles size={14} className="shrink-0" />
-          <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>plans &amp; pricing</span>
+          <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>Plans &amp; pricing</span>
         </a>
       )}
       <a
         href="mailto:info@openshorts.app"
-        className="flex items-center gap-2 px-3 py-2 text-xs lowercase text-muted hover:text-ink2 transition-colors"
+        aria-label="Email info@openshorts.app"
+        className={`flex items-center gap-2 px-3 py-2 text-xs text-muted hover:text-ink transition-colors duration-150 rounded-input ${collapsed ? 'justify-center lg:justify-start' : ''}`}
       >
         <Mail size={14} className="shrink-0" />
         <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>info@openshorts.app</span>
@@ -1358,15 +1364,15 @@ function App() {
   // Desktop rail: icon-only from md, labelled from lg. Below md it is gone
   // entirely — an unlabelled 80px rail ate a fifth of a phone screen.
   const Sidebar = () => (
-    <div className="hidden md:flex w-20 lg:w-64 bg-paper2 border-r border-rule flex-col h-full shrink-0 transition-all duration-300">
-      <a href="#app" onClick={() => goToTab('dashboard')} className="p-6 flex items-center gap-3" title="openshorts home">
+    <div className="hidden md:flex w-16 lg:w-56 bg-paper2 border-r border-rule flex-col h-full shrink-0 transition-[width] duration-200 ease-out">
+      <a href="#app" onClick={() => goToTab('dashboard')} className="h-14 px-4 lg:px-5 flex items-center justify-center lg:justify-start gap-3 shrink-0" title="openshorts home" aria-label="openshorts home">
         <div className="w-8 h-8 bg-paper3 rounded-input flex items-center justify-center shrink-0 overflow-hidden border border-rule">
           <img src="/logo-openshorts.png" alt="Logo" className="w-full h-full object-cover" />
         </div>
         <span className="font-display lowercase text-lg text-ink hidden lg:block">openshorts</span>
       </a>
 
-      <nav className="flex-1 px-4 py-4 space-y-1">
+      <nav aria-label="Sections" className="flex-1 px-2.5 lg:px-3 py-2 space-y-0.5 overflow-y-auto custom-scrollbar">
         {navItems.map((item) => {
           const NavIcon = item.icon;
           const isActive = activeTab === item.id;
@@ -1376,25 +1382,26 @@ function App() {
               data-tutorial={item.id === 'dashboard' ? 'nav-clips' : undefined}
               onClick={() => goToTab(item.id)}
               title={tabLocked(item.id) ? 'Finish your first clips to unlock' : item.label}
+              aria-label={item.label}
+              aria-current={isActive ? 'page' : undefined}
               disabled={tabLocked(item.id)}
-              className={`relative w-full flex items-center gap-3 px-3 py-2.5 rounded-input transition-colors ${isActive ? 'bg-paper3 text-ink' : 'text-muted hover:text-ink2 hover:bg-paper3/50'} ${tabLocked(item.id) ? 'opacity-40 cursor-not-allowed hover:bg-transparent hover:text-muted' : ''}`}
+              className={`relative w-full flex items-center justify-center lg:justify-start gap-3 px-3 py-2.5 rounded-input transition-colors duration-150 ${isActive ? 'bg-paper3 text-ink' : 'text-muted hover:text-ink2 hover:bg-paper3/50'} ${tabLocked(item.id) ? 'opacity-40 cursor-not-allowed hover:bg-transparent hover:text-muted' : ''}`}
             >
               {isActive && (
                 <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 bg-brass rounded-full" aria-hidden="true" />
               )}
               <NavIcon size={18} className="shrink-0" />
-              <span className="text-sm lowercase hidden lg:block flex-1 text-left truncate">{item.label}</span>
+              <span className="text-sm hidden lg:block flex-1 text-left truncate">{item.label}</span>
               {tabLocked(item.id)
                 ? <Lock size={12} className="shrink-0 hidden lg:block" />
-                : item.byok ? <span className="readout hidden lg:block">BYOK</span>
-                  : item.isNew ? <span className="badge-brass hidden lg:block">new</span> : null}
-              <span className="readout hidden lg:block">{item.ord}</span>
+                : item.byok ? <Chip className="hidden lg:inline-flex">BYOK</Chip>
+                  : item.isNew ? <Chip tone="accent" className="hidden lg:inline-flex">new</Chip> : null}
             </button>
           );
         })}
       </nav>
 
-      <div className="p-4 border-t border-rule space-y-1">
+      <div className="p-2.5 lg:p-3 border-t border-rule space-y-0.5">
         <NavFooterLinks collapsed />
       </div>
     </div>
@@ -1447,11 +1454,11 @@ function App() {
                   <span className="absolute left-0 top-2 bottom-2 w-0.5 bg-brass rounded-full" aria-hidden="true" />
                 )}
                 <NavIcon size={18} className={`shrink-0 ${isActive ? 'text-brass' : ''}`} />
-                <span className="text-[0.95rem] lowercase flex-1 text-left truncate">{item.label}</span>
+                <span className="text-[0.95rem] flex-1 text-left truncate">{item.label}</span>
                 {tabLocked(item.id)
                   ? <Lock size={12} className="shrink-0" />
-                  : item.byok ? <span className="readout shrink-0">BYOK</span>
-                    : item.isNew ? <span className="badge-brass shrink-0">new</span> : null}
+                  : item.byok ? <Chip className="shrink-0">BYOK</Chip>
+                    : item.isNew ? <Chip tone="accent" className="shrink-0">new</Chip> : null}
               </button>
             );
           })}
@@ -1487,7 +1494,7 @@ function App() {
                 className={`flex-1 min-w-0 flex flex-col items-center justify-center gap-1 py-2 min-h-[56px] transition-colors ${isActive ? 'text-ink' : 'text-muted active:text-ink2'} ${tabLocked(item.id) ? 'opacity-40 cursor-not-allowed' : ''}`}
               >
                 <NavIcon size={19} className={isActive ? 'text-brass' : ''} />
-                <span className="text-[10.5px] lowercase leading-none truncate max-w-full px-0.5">{item.short}</span>
+                <span className="text-[11px] leading-none truncate max-w-full px-0.5">{item.short}</span>
               </button>
             );
           })}
@@ -1498,7 +1505,7 @@ function App() {
             className={`flex-1 min-w-0 flex flex-col items-center justify-center gap-1 py-2 min-h-[56px] transition-colors ${moreActive ? 'text-ink' : 'text-muted active:text-ink2'}`}
           >
             <Menu size={19} className={moreActive ? 'text-brass' : ''} />
-            <span className="text-[10.5px] lowercase leading-none">more</span>
+            <span className="text-[11px] leading-none">more</span>
           </button>
         </div>
       </nav>
@@ -1530,14 +1537,15 @@ function App() {
               {activeNav?.label || 'openshorts'}
             </span>
             {status !== 'idle' && (
-              <button
+              <Button
+                variant="quiet"
                 onClick={handleReset}
-                className="btn-quiet px-3 py-1.5 text-xs shrink-0"
+                className="px-3 py-1.5 text-xs shrink-0"
                 aria-label="New Project"
               >
                 <Plus size={14} />
                 <span className="hidden sm:inline">New Project</span>
-              </button>
+              </Button>
             )}
           </div>
 
@@ -1561,16 +1569,14 @@ function App() {
               }} />
             )}
             {billingEnabled && isSignedIn && !isManaged && (
-              <button onClick={() => setShowPlanChoice(true)}
-                className="btn-primary px-4 py-2 text-xs">
+              <Button onClick={() => setShowPlanChoice(true)} className="px-4 py-2 text-xs">
                 Choose a plan
-              </button>
+              </Button>
             )}
             {billingEnabled && !isSignedIn && (
-              <button onClick={() => setShowLogin(true)}
-                className="btn-ghost px-4 py-2 text-xs">
+              <Button variant="ghost" onClick={() => setShowLogin(true)} className="px-4 py-2 text-xs">
                 Sign in
-              </button>
+              </Button>
             )}
             <ThemeToggle />
             {billingEnabled && isSignedIn && <ProfileMenu onUpgrade={isManaged ? openUpsell : null} />}
@@ -1613,12 +1619,9 @@ function App() {
                 </span>
               </div>
             </div>
-            <button
-              onClick={() => goToTab('settings')}
-              className="btn-quiet px-3 py-1.5 text-xs shrink-0 w-full sm:w-auto"
-            >
+            <Button variant="quiet" onClick={() => goToTab('settings')} className="px-3 py-1.5 text-xs shrink-0 w-full sm:w-auto">
               Go to Settings
-            </button>
+            </Button>
           </div>
         )}
 
