@@ -72,3 +72,20 @@ silently). Self-host `/api/process` then accepts a request without
 `X-Gemini-Key` and `/api/config.localLlm` tells the dashboard not to demand one.
 Frame-based stages (`layout_picker`, `screencast_layout`, `get_visual_clips`)
 stay on Gemini. Never wired in cloud mode: `BILLING_ENABLED` ignores it.
+
+## Range jobs: pieces instead of a source (`source_ranges.py`, `range_ingest.py`)
+
+Self-host URL jobs pick moments from the audio transcript alone, then download
+`[start - pad, end + pad]` pieces (`RANGE_PAD_SECONDS`, default 10; ranges closer
+than `RANGE_MERGE_GAP`, default 8 s, merge). `RANGE_MAX_TOTAL_SECONDS` (default
+1800) caps the total: the lowest-scored clips go first, but never below the
+clip-count floor (`clip_count_targets`); past it the log says the floor won.
+A clip starting at or after the audio's end is dropped, one ending past it is
+clamped. A clip whose piece failed twice is dropped (logged), and the job fails
+only when none is left. Sparse speech (the vision fallback needs frames) takes
+the legacy full download. Clip dicts keep absolute source time; each cut is
+`cut_clip(piece, start - piece_start, end - piece_start)`. Metadata carries
+`source_pieces` (file, start, end), `source_url` and `source_duration`;
+recut, re-frame, scenes and the editor monitor resolve the piece that holds the
+segments (`app._locate_source_for_range`) and answer 409 when none does. The
+layout picker and burned-subtitle probe do not run on range jobs yet.

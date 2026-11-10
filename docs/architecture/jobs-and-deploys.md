@@ -195,3 +195,12 @@ coordinates them:
 
 Every deploy is a full build plus a handover, so batch small commits (tests,
 docs) with the next real change.
+
+## Range jobs in the job directory
+
+A range job leaves `<title>.piece_<n>.mp4` pieces in its directory (kept for
+recut, aged out by the source retention sweep like a kept source). While it runs
+there is also `<title>.audio.m4a` and `<title>.pieces.json` (which range each
+piece holds): a resumed or drain-cancelled job reuses a piece only when the file
+exists and the sidecar has the same range, so the download step is idempotent.
+Both are removed when the job finishes.
