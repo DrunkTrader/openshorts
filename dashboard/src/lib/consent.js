@@ -111,7 +111,6 @@ export function onConsentChange(fn) {
  * document that never loads it.
  */
 export function setConsent(choice) {
-  const before = getConsent();
   const next = {
     v: VERSION,
     ts: new Date().toISOString(),

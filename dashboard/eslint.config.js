@@ -5,7 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  globalIgnores(['dist', 'public/op1.js']), // op1.js: minified vendor bundle
   {
     files: ['**/*.{js,jsx}'],
     extends: [
@@ -26,8 +26,9 @@ export default defineConfig([
       // `catch (e)` / `catch (_)` with the error deliberately ignored is the
       // house style for best-effort localStorage and fetch calls.
       'no-unused-vars': ['error', {
-        varsIgnorePattern: '^[A-Z_]', argsIgnorePattern: '^_', caughtErrors: 'none',
+        varsIgnorePattern: '^[A-Z_]', argsIgnorePattern: '^[A-Z_]', caughtErrors: 'none',  // `icon: Icon` props rendered as <Icon />
       }],
+      'no-empty': ['error', { allowEmptyCatch: true }],
       // Contexts and modals export a hook or a constant next to the component.
       'react-refresh/only-export-components': ['error', { allowConstantExport: true }],
     },
