@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, Scissors, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
@@ -376,6 +376,17 @@ function App() {
   const [serverStatus, setServerStatus] = useState('queued');
   // The last submitted request, so the error state can offer a real Retry.
   const lastRequestRef = useRef(null);
+  // Phones: the source monitor of a settled job sits behind a disclosure.
+  const [showSource, setShowSource] = useState(false);
+  // Completion swaps the scroller (results panel -> page): carry the offset over.
+  const pageScrollRef = useRef(null);
+  const resultsPanelRef = useRef(null);
+  const resultsScrollTop = useRef(0);
+  useLayoutEffect(() => {
+    if (status === 'processing' || !pageScrollRef.current || !resultsPanelRef.current || !resultsScrollTop.current) return;
+    pageScrollRef.current.scrollTop = resultsPanelRef.current.offsetTop + resultsScrollTop.current;
+    resultsScrollTop.current = 0;
+  }, [status]);
   const jobInfo = useMemo(() => deriveStage({
     status: status === 'complete' ? 'completed' : status === 'error' ? 'failed' : serverStatus,
     logs,
@@ -2060,7 +2071,7 @@ function App() {
           {activeTab === 'history' && (
             <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
               <div className="max-w-6xl mx-auto p-4 sm:p-6 md:p-8">
-                <HistoryTab onReopenProject={restoreProject} onCreate={() => { if (status === 'complete' || status === 'error') handleReset(); goToTab('dashboard'); }} />
+                <HistoryTab onReopenProject={restoreProject} onCreate={() => { if (status === 'complete' || status === 'error') handleReset(); goToTab('dashboard'); setTimeout(() => document.getElementById('source-url')?.focus(), 150); }} />
               </div>
             </div>
           )}
@@ -2130,11 +2141,11 @@ function App() {
 
           {/* View: Processing / Results (Split View) */}
           {activeTab === 'dashboard' && (status === 'processing' || status === 'complete' || status === 'error') && (
-            <div className={`h-full flex flex-col gap-3 md:gap-4 p-3 md:p-4 overflow-y-auto custom-scrollbar animate-fade ${status === 'processing' ? 'md:flex-row md:overflow-y-hidden' : ''}`}>
+            <div ref={pageScrollRef} className={`h-full flex flex-col gap-3 md:gap-4 p-3 md:p-4 overflow-y-auto custom-scrollbar animate-fade ${status === 'processing' ? 'md:flex-row md:overflow-y-hidden' : ''}`}>
 
               {/* Left Panel: Preview & Status */}
               {/* Settled (done or failed): a slim status bar over full-width results. */}
-              <div className={`${status === 'processing' ? 'w-full md:w-[55%] lg:w-[60%] md:h-full flex flex-col md:shrink p-3.5 sm:p-6 md:overflow-y-auto' : 'w-full flex flex-col md:grid md:grid-cols-[minmax(0,1fr)_11rem] md:gap-x-5 p-3.5 sm:p-5'} shrink-0 card custom-scrollbar transition-all duration-200 ease-out`}>
+              <div className={`${status === 'processing' ? 'w-full md:w-[55%] lg:w-[60%] md:h-full flex flex-col md:shrink p-3.5 sm:p-6 md:overflow-y-auto' : `w-full flex flex-col ${processingMedia ? 'md:grid md:grid-cols-[minmax(0,1fr)_11rem] md:gap-x-5' : ''} p-3.5 sm:p-5`} shrink-0 card custom-scrollbar transition-all duration-200 ease-out ${status === 'error' ? 'order-2 md:order-none' : ''}`}>
                 <div className={`${status === 'processing' ? 'mb-4 sm:mb-6' : 'mb-3'} flex items-center justify-between gap-2`}>
                   <h2 className="text-sm font-medium text-ink lowercase flex items-center gap-2 whitespace-nowrap">
                     <Activity className={`text-brass ${status === 'processing' ? 'animate-pulse' : ''}`} size={18} />
@@ -2177,7 +2188,7 @@ function App() {
 
                 {/* Video Preview */}
                 {processingMedia && (
-                  <div className={status === 'processing' ? '' : 'hidden md:block md:col-start-2 md:row-start-1 md:row-span-3 [&>div]:!mb-0 [&>div]:!aspect-video'}>
+                  <div className={status === 'processing' ? '' : `${showSource ? 'order-last mt-3' : 'hidden'} md:block md:order-none md:mt-0 md:col-start-2 md:row-start-1 md:row-span-3 [&>div]:!mb-0 [&>div]:!aspect-video`}>
                   <ProcessingAnimation
                     media={processingMedia}
                     isComplete={status === 'complete'}
@@ -2189,6 +2200,17 @@ function App() {
                 )}
 
                 <JobTimeline info={jobInfo} compact={status !== 'processing'} />
+
+                {status !== 'processing' && processingMedia && (
+                  <button
+                    type="button"
+                    onClick={() => setShowSource((v) => !v)}
+                    aria-expanded={showSource}
+                    className="md:hidden self-start mb-2 text-xs text-muted underline underline-offset-2"
+                  >
+                    {showSource ? 'Hide source' : 'View source'}
+                  </button>
+                )}
 
                 {/* The render is dead time: the user is watching a progress bar
                     with nothing to do, so this is where the one star ask goes. */}
@@ -2221,7 +2243,7 @@ function App() {
               </div>
 
               {/* Right Panel: Results Grid */}
-              <div className={`${status === 'processing' ? 'w-full md:w-[45%] lg:w-[40%] md:h-full md:shrink' : 'w-full'} flex flex-col shrink-0 card p-3.5 sm:p-6 transition-all duration-200 ease-out`}>
+              <div ref={resultsPanelRef} className={`${status === 'processing' ? 'w-full md:w-[45%] lg:w-[40%] md:h-full md:shrink' : 'w-full'} flex flex-col shrink-0 card p-3.5 sm:p-6 transition-all duration-200 ease-out ${status === 'error' ? 'order-1 md:order-none' : ''}`}>
                 {/* Title + counters on one row, the two actions on their own row
                     below. Wrapping them all together dropped a lone half-width
                     "schedule week" pill under the title on a phone. */}
@@ -2387,7 +2409,7 @@ function App() {
                   </div>
                 )}
 
-                <div className={`flex-1 p-1 ${status === 'processing' ? 'overflow-y-auto custom-scrollbar' : ''}`}>
+                <div onScroll={(e) => { if (status === 'processing') resultsScrollTop.current = e.currentTarget.scrollTop; }} className={`flex-1 p-1 ${status === 'processing' ? 'overflow-y-auto custom-scrollbar' : ''}`}>
                   {results && results.clips && results.clips.length > 0 ? (
                     <div className={`grid gap-4 pb-10 ${status === 'complete' ? 'grid-cols-[repeat(auto-fill,minmax(min(100%,560px),1fr))]' : 'grid-cols-1'}`}>
                       {rankedClips.map(({ clip, index: i }) => (

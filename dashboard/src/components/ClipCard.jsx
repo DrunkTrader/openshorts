@@ -127,8 +127,9 @@ const ClipCard = forwardRef(function ClipCard(
   useEffect(() => {
     if (!wantPeaks || !src) return undefined;
     let alive = true;
-    loadPeaks(src).then((p) => { if (alive) setPeaks(p); });
-    return () => { alive = false; };
+    const ctl = new AbortController();
+    loadPeaks(src, 96, ctl.signal).then((p) => { if (alive) setPeaks(p); });
+    return () => { alive = false; ctl.abort(); };
   }, [wantPeaks, src]);
 
   const askScenes = useCallback(() => {
@@ -140,9 +141,14 @@ const ClipCard = forwardRef(function ClipCard(
       .catch(() => {});
   }, [sceneSource]);
 
+  const dwell = useRef(null);
+  useEffect(() => () => clearTimeout(dwell.current), []);
   const hoverIn = (e) => {
     if (e.pointerType === 'touch' || !canHover) return;
-    askScenes();
+    // Peaks and scenes cost a download and an editor call: only after a
+    // deliberate dwell, never for a pointer sweeping across the page.
+    clearTimeout(dwell.current);
+    dwell.current = setTimeout(askScenes, 600);
     const v = videoRef.current;
     if (reduced || !v || !v.paused) return;
     hoverStarted.current = true;
@@ -150,6 +156,7 @@ const ClipCard = forwardRef(function ClipCard(
     v.play().catch(() => {});
   };
   const hoverOut = (e) => {
+    clearTimeout(dwell.current);
     if (e.pointerType === 'touch') return;
     const v = videoRef.current;
     if (v && hoverStarted.current && !pinned.current) v.pause();

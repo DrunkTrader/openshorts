@@ -6,12 +6,13 @@ const MAX_SECONDS = 180;
 const cache = new Map();
 let chain = Promise.resolve();
 
-async function compute(url, bars) {
+async function compute(url, bars, signal) {
+  if (signal?.aborted) return null;
   // Size probe first: an unknown or oversize file is never downloaded twice.
-  const head = await fetch(url, { method: 'HEAD' });
+  const head = await fetch(url, { method: 'HEAD', signal });
   const len = Number(head.headers.get('content-length')) || 0;
   if (!head.ok || !len || len > MAX_BYTES) return null;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal });
   if (!res.ok) return null;
   const buf = await res.arrayBuffer();
   if (buf.byteLength > MAX_BYTES) return null;
@@ -39,13 +40,15 @@ async function compute(url, bars) {
 // Resolves to a Float32Array of normalised peaks, or null (no audio track,
 // undecodable codec, too big, cross-origin without CORS): callers draw the
 // scene strip alone.
-export function loadPeaks(url, bars = 96) {
+export function loadPeaks(url, bars = 96, signal) {
   if (!url) return Promise.resolve(null);
   const key = `${url}|${bars}`;
   if (!cache.has(key)) {
-    const p = chain.then(() => compute(url, bars)).catch(() => null);
+    const p = chain.then(() => compute(url, bars, signal)).catch(() => null);
     chain = p.then(() => undefined);
+    // An aborted run must not poison the cache with its null.
     cache.set(key, p);
+    p.then((v) => { if (v === null && signal?.aborted) cache.delete(key); });
   }
   return cache.get(key);
 }

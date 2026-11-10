@@ -15,7 +15,7 @@ export default function JobTimeline({ info, compact = false }) {
             <li
               key={s.id}
               aria-current={current ? 'step' : undefined}
-              className="flex-1 min-w-0 relative flex flex-col items-center text-center"
+              className="flex-1 min-w-0 relative flex flex-col items-center gap-2 text-center"
             >
               {i > 0 && (
                 <span
@@ -30,7 +30,7 @@ export default function JobTimeline({ info, compact = false }) {
                     : current ? (failed ? 'bg-danger border-danger' : 'bg-brass border-brass ring-4 ring-brass/20')
                       : 'bg-paper2 border-rule2'}`}
               />
-              <span className={`mt-2 text-[11px] sm:text-xs leading-tight transition-colors duration-200 ${compact && !current && !(s.id === 'done' && index === 4) ? 'sr-only sm:not-sr-only' : ''} ${current ? 'text-ink font-medium' : done ? 'text-ink2' : 'text-muted'}`}>
+              <span className={`text-[11px] sm:text-xs leading-tight transition-colors duration-200 ${compact && !current && !(s.id === 'done' && index === 4) ? 'sr-only sm:not-sr-only' : ''} ${current ? 'text-ink font-medium' : done ? 'text-ink2' : 'text-muted'}`}>
                 {s.label}
               </span>
             </li>
