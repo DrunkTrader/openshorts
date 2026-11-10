@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 
 /**
@@ -21,6 +22,23 @@ const SIZES = {
 };
 
 export default function Modal({ isOpen, onClose, title, eyebrow, size = 'md', children, footer, hideClose = false }) {
+  const panelRef = useRef(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
+  // Escape closes; focus moves into the dialog and returns to the opener.
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const opener = document.activeElement;
+    panelRef.current?.focus();
+    const onKey = (e) => { if (e.key === 'Escape' && closeRef.current) { e.stopPropagation(); closeRef.current(); } };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      if (opener instanceof HTMLElement && document.contains(opener)) opener.focus();
+    };
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   return (
@@ -32,9 +50,12 @@ export default function Modal({ isOpen, onClose, title, eyebrow, size = 'md', ch
       onMouseDown={(e) => { if (e.target === e.currentTarget && onClose) onClose(); }}
       role="dialog"
       aria-modal="true"
+      aria-label={title || undefined}
     >
       <div
-        className={`card relative w-full ${SIZES[size] || SIZES.md} max-h-[92vh] sm:max-h-[90vh] flex flex-col
+        ref={panelRef}
+        tabIndex={-1}
+        className="outline-none {`card relative w-full ${SIZES[size] || SIZES.md} max-h-[92vh] sm:max-h-[90vh] flex flex-col
           rounded-b-none sm:rounded-card animate-sheet-up sm:animate-none`}
       >
         {/* Grab handle: the affordance that says "this sheet closes downward". */}
