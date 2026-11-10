@@ -27,6 +27,7 @@ import AdvancedBanner from './components/AdvancedBanner';
 import HistoryTab from './components/HistoryTab';
 import AutopilotTab from './components/AutopilotTab';
 import ProfileMenu from './components/ProfileMenu';
+import ThemeToggle from './components/ui/ThemeToggle';
 import Modal from './components/ui/Modal';
 import { useAuth } from './contexts/AuthContext';
 import { apiFetch, apiJson, QuotaError, QUOTA_WALL_EVENT } from './lib/api';
@@ -1571,6 +1572,7 @@ function App() {
                 Sign in
               </button>
             )}
+            <ThemeToggle />
             {billingEnabled && isSignedIn && <ProfileMenu onUpgrade={isManaged ? openUpsell : null} />}
 
             {/* Hidden below sm: the standing banner underneath already says the
