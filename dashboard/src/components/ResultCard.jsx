@@ -6,6 +6,7 @@ import { track } from '../lib/analytics';
 import SubtitleModal from './SubtitleModal';
 import HookModal from './HookModal';
 import TranslateModal from './TranslateModal';
+import ClipCard from './ClipCard';
 import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
 import WatermarkModal, { watermarkNoticeDismissed } from './WatermarkModal';
@@ -789,54 +790,53 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     const durationReadout = formatDuration(clip);
 
     return (
-        <div className="card overflow-hidden flex flex-col md:flex-row group hover:border-rule2 transition-colors animate-fade md:min-h-[420px]" style={{ animationDelay: `${index * 0.1}s` }}>
+        <div className="card card-hover overflow-hidden flex flex-col md:flex-row group animate-fade md:min-h-[420px]" style={{ animationDelay: `${index * 0.1}s` }}>
             {/* Left: Video Preview — 9:16 column matching the fixed card height */}
             {/* A full-width 9:16 preview on a phone is ~640px tall on its own,
                 which pushed the title, captions and every action off-screen.
                 Capping the height and centring keeps the whole card scannable
                 without letterboxing the clip. */}
-            <div className="w-full max-w-[calc(64vh*0.5625)] md:max-w-none mx-auto md:mx-0 md:w-[236px] bg-black relative shrink-0 aspect-[9/16] md:aspect-auto group/video">
-                <video
-                    ref={videoRef}
-                    src={playbackUrl}
-                    controls
-                    className="w-full h-full object-contain"
-                    playsInline
-                    onLoadedMetadata={(e) => {
-                        if (e.target.videoWidth) setResolution(`${e.target.videoWidth}×${e.target.videoHeight}`);
-                    }}
-                    onError={() => {
-                        // The durable copy is unreachable (signature expired after an
-                        // hour on an idle tab, object purged) → serve from the API for
-                        // the rest of this card's life.
-                        if (playbackUrl === durableSrc) {
-                            setDurableFailed(true);
-                            return;
-                        }
-                        // Local /videos/ file gone (e.g. cleaned up after a reload) →
-                        // fall back to the durable R2 copy for managed users. If the
-                        // durable URL hasn't loaded yet, the effect above retries.
-                        if (durable?.url && currentVideoUrl !== durable.url) setCurrentVideoUrl(durable.url);
-                        else setVideoErrored(true);
-                    }}
-                    onPlay={() => {
-                        setHasPlayed(true);
-                        const currentTime = videoRef.current ? videoRef.current.currentTime : 0;
-                        onPlay && onPlay(clip.start + currentTime);
-                    }}
-                    onPause={() => onPause && onPause()}
-                    onEnded={() => {
-                        if (videoRef.current) {
-                            videoRef.current.currentTime = 0;
-                            videoRef.current.play();
-                        }
-                    }}
-                />
+            <ClipCard
+                ref={videoRef}
+                src={playbackUrl}
+                sceneSource={jobId ? { jobId, index } : null}
+                className="w-full max-w-[calc(64vh*0.5625)] md:max-w-none mx-auto md:mx-0 md:w-[236px] shrink-0"
+                boxClass="aspect-[9/16] md:aspect-auto"
+                onLoadedMetadata={(e) => {
+                    if (e.target.videoWidth) setResolution(`${e.target.videoWidth}×${e.target.videoHeight}`);
+                }}
+                onError={() => {
+                    // The durable copy is unreachable (signature expired after an
+                    // hour on an idle tab, object purged) → serve from the API for
+                    // the rest of this card's life.
+                    if (playbackUrl === durableSrc) {
+                        setDurableFailed(true);
+                        return;
+                    }
+                    // Local /videos/ file gone (e.g. cleaned up after a reload) →
+                    // fall back to the durable R2 copy for managed users. If the
+                    // durable URL hasn't loaded yet, the effect above retries.
+                    if (durable?.url && currentVideoUrl !== durable.url) setCurrentVideoUrl(durable.url);
+                    else setVideoErrored(true);
+                }}
+                onPlay={() => {
+                    setHasPlayed(true);
+                    const currentTime = videoRef.current ? videoRef.current.currentTime : 0;
+                    onPlay && onPlay(clip.start + currentTime);
+                }}
+                onPause={() => onPause && onPause()}
+                onEnded={() => {
+                    if (videoRef.current) {
+                        videoRef.current.currentTime = 0;
+                        videoRef.current.play();
+                    }
+                }}
+                overlay={(<>
                 <div className="absolute top-3 left-3 flex gap-2">
                     {/* Stays the clip's own number, not its rank: the cards are
                         ordered by score, but this is what the downloaded file
                         is called (clip-N.mp4) and what every api call indexes. */}
-                    <span className="bg-black/70 text-ink font-mono text-micro uppercase px-2 py-1 rounded-full">
+                    <span className="bg-black/70 text-white font-mono text-micro uppercase px-2 py-1 rounded-full">
                         Clip {index + 1}
                     </span>
                     {/* A bare number on a thumbnail reads as a duration, a
@@ -847,16 +847,16 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                             className="bg-black/70 font-mono text-micro uppercase px-2 py-1 rounded-full flex items-center gap-1"
                             title="openshorts' prediction of how well this clip will perform, from 0 to 100"
                         >
-                            <TrendingUp size={11} className="shrink-0 text-muted" />
-                            <span className="text-muted">viral</span>
-                            <b className={
-                                clip.predicted_score >= 80 ? 'text-ok'
-                                    : clip.predicted_score >= 65 ? 'text-brass'
-                                        : 'text-ink2'
+                            <TrendingUp size={11} className="shrink-0 text-white/70" />
+                            <span className="text-white/70">viral</span>
+                            <b className={'tabular font-semibold ' + (
+                                clip.predicted_score >= 80 ? 'text-[oklch(80%_0.14_150)]'
+                                    : clip.predicted_score >= 65 ? 'text-[oklch(78%_0.15_55)]'
+                                        : 'text-white')
                             }>
                                 {clip.predicted_score}
                             </b>
-                            <span className="text-muted">/100</span>
+                            <span className="text-white/70">/100</span>
                         </span>
                     )}
                 </div>
@@ -865,11 +865,12 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 {isEditing && (
                     <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center z-10 p-4 text-center">
                         <Loader2 size={28} className="text-brass animate-spin mb-3" />
-                        <span className="text-xs text-ink lowercase">ai magic in progress…</span>
-                        <span className="readout mt-1.5">APPLYING VIRAL EDITS · ZOOMS</span>
+                        <span className="text-xs text-white lowercase">ai magic in progress…</span>
+                        <span className="readout !text-white/70 mt-1.5">APPLYING VIRAL EDITS · ZOOMS</span>
                     </div>
                 )}
-            </div>
+                </>)}
+            />
 
             {/* Right: Content & Details */}
             <div className="flex-1 p-4 md:p-5 flex flex-col overflow-hidden min-w-0">
