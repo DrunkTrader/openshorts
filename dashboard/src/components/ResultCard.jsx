@@ -791,7 +791,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     const durationReadout = formatDuration(clip);
 
     return (
-        <div className={`card card-hover overflow-hidden flex flex-col group animate-fade ${stacked ? '' : 'lg:flex-row lg:min-h-[420px]'}`} style={{ animationDelay: `${index * 0.1}s` }}>
+        <div className={`card card-hover overflow-hidden flex flex-col group animate-fade ${stacked ? '' : 'md:flex-row md:min-h-[420px]'}`} style={{ animationDelay: `${index * 0.1}s` }}>
             {/* Left: Video Preview — 9:16 column matching the fixed card height */}
             {/* A full-width 9:16 preview on a phone is ~640px tall on its own,
                 which pushed the title, captions and every action off-screen.
@@ -801,8 +801,8 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 ref={videoRef}
                 src={playbackUrl}
                 sceneSource={jobId ? { jobId, index } : null}
-                className={`w-full max-w-[calc(64vh*0.5625)] mx-auto shrink-0 ${stacked ? '' : 'lg:max-w-none lg:mx-0 lg:w-[236px]'}`}
-                boxClass={stacked ? 'aspect-[9/16]' : 'aspect-[9/16] lg:aspect-auto'}
+                className={`w-full max-w-[calc(52vh*0.5625)] mx-auto shrink-0 ${stacked ? '' : 'md:max-w-none md:mx-0 md:w-[236px]'}`}
+                boxClass={stacked ? 'aspect-[9/16]' : 'aspect-[9/16] md:aspect-auto'}
                 onLoadedMetadata={(e) => {
                     if (e.target.videoWidth) setResolution(`${e.target.videoWidth}×${e.target.videoHeight}`);
                 }}
