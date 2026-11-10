@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { AlertCircle, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { getApiUrl } from '../config';
 import GalleryCard from './GalleryCard';
+import Skeleton from './ui/Skeleton';
 
 const CLIPS_PER_PAGE = 20;
 
@@ -76,18 +77,24 @@ export default function Gallery() {
 
     if (loading) {
         return (
-            <div className="h-full flex flex-col items-center justify-center text-muted animate-fade">
-                <Loader2 size={32} className="animate-spin mb-4 text-brass" />
-                <p className="lowercase">Loading your viral history...</p>
+            <div className="h-full overflow-y-auto p-6 md:p-8" aria-busy="true" aria-label="Loading clips">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6">
+                    {[0, 1, 2, 3].map((n) => (
+                        <div key={n} className="card overflow-hidden">
+                            <Skeleton className="aspect-[9/16] !rounded-none" />
+                            <div className="p-4 space-y-2"><Skeleton className="h-4 w-3/4" /><Skeleton className="h-3 w-1/3" /></div>
+                        </div>
+                    ))}
+                </div>
             </div>
         );
     }
 
     if (error) {
         return (
-            <div className="h-full flex flex-col items-center justify-center text-danger p-6">
-                <AlertCircle size={32} className="mb-4" />
-                <p>Error loading gallery: {error}</p>
+            <div role="alert" className="h-full flex flex-col items-center justify-center text-center p-6">
+                <h2 className="font-display text-3xl text-ink mb-2">The gallery did not load.</h2>
+                <p className="text-sm text-muted">{error}</p>
                 <button
                     onClick={() => {
                         setError(null);
@@ -115,9 +122,9 @@ export default function Gallery() {
             </div>
 
             {clips.length === 0 ? (
-                <div className="text-center py-20 text-muted">
-                    <p className="text-lg mb-2 lowercase">No clips found yet.</p>
-                    <p className="text-sm lowercase">Process some videos to populate your gallery!</p>
+                <div className="py-20 max-w-md">
+                    <h2 className="font-display text-4xl text-ink mb-2">No clips yet</h2>
+                    <p className="text-sm text-muted">Clips from your finished jobs collect here. Make the first one from the Clip Generator.</p>
                 </div>
             ) : (
                 <>

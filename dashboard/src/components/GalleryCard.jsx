@@ -1,12 +1,11 @@
 import React, { useRef, useState, useEffect } from 'react';
+import ClipCard from './ClipCard';
 import { Download, Copy, Check, Play } from 'lucide-react';
 
 export default function GalleryCard({ clip }) {
     const [copied, setCopied] = useState(null);
     const [isVisible, setIsVisible] = useState(false);
-    const [_hasLoaded, setHasLoaded] = useState(false);
     const cardRef = useRef(null);
-    const videoRef = useRef(null);
 
     // Lazy loading with IntersectionObserver
     useEffect(() => {
@@ -71,30 +70,21 @@ export default function GalleryCard({ clip }) {
             className="card card-hover overflow-hidden flex flex-col group animate-fade"
         >
             {/* Video Player - Lazy loaded */}
-            <div className="aspect-[9/16] bg-black relative group/video">
-                {isVisible ? (
-                    <video
-                        ref={videoRef}
-                        src={clip.url}
-                        controls
-                        className="w-full h-full object-cover"
-                        playsInline
-                        preload="metadata"
-                        onLoadedData={() => setHasLoaded(true)}
-                    />
-                ) : (
-                    <div className="w-full h-full flex items-center justify-center bg-paper">
-                        <div className="w-12 h-12 rounded-full bg-paper3 flex items-center justify-center">
-                            <Play size={24} className="text-muted ml-1" />
-                        </div>
-                    </div>
-                )}
-                <div className="absolute top-2 left-2">
-                    <span className="readout bg-black/70 px-2 py-1 rounded-full">
-                        {new Date(clip.created_at).toLocaleDateString()}
-                    </span>
+            {isVisible ? (
+                <ClipCard
+                    src={clip.url}
+                    fit="cover"
+                    overlay={(
+                        <span className="absolute top-2 left-2 readout tabular !text-white bg-black/70 px-2 py-1 rounded-full">
+                            {new Date(clip.created_at).toLocaleDateString()}
+                        </span>
+                    )}
+                />
+            ) : (
+                <div className="aspect-[9/16] bg-paper3 flex items-center justify-center">
+                    <Play size={24} className="text-muted" aria-hidden="true" />
                 </div>
-            </div>
+            )}
 
             {/* Content & Details */}
             <div className="flex-1 p-4 flex flex-col min-w-0">
