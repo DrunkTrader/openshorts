@@ -55,7 +55,7 @@ export default function Modal({ isOpen, onClose, title, eyebrow, size = 'md', ch
       <div
         ref={panelRef}
         tabIndex={-1}
-        className="outline-none {`card relative w-full ${SIZES[size] || SIZES.md} max-h-[92vh] sm:max-h-[90vh] flex flex-col
+        className={`outline-none card relative w-full ${SIZES[size] || SIZES.md} max-h-[92vh] sm:max-h-[90vh] flex flex-col
           rounded-b-none sm:rounded-card animate-sheet-up sm:animate-none`}
       >
         {/* Grab handle: the affordance that says "this sheet closes downward". */}
