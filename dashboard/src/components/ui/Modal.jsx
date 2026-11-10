@@ -35,12 +35,13 @@ export default function Modal({ isOpen, onClose, returnFocusRef, title, eyebrow,
   useEffect(() => {
     if (!isOpen) return undefined;
     const opener = openerRef.current;
+    const fallback = returnFocusRef?.current;
     panelRef.current?.focus();
     const onKey = (e) => { if (e.key === 'Escape' && closeRef.current) { e.stopPropagation(); closeRef.current(); } };
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('keydown', onKey);
-      const back = opener instanceof HTMLElement && document.contains(opener) && opener !== document.body ? opener : returnFocusRef?.current;
+      const back = opener instanceof HTMLElement && document.contains(opener) && opener !== document.body ? opener : fallback;
       if (back instanceof HTMLElement) back.focus();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
