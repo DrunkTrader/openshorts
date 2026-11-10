@@ -48,6 +48,18 @@ def test_format_is_720p_on_the_paid_proxy(main, fake_ydl, tmp_path, monkeypatch)
     assert "height<=720" in _format_used(fake_ydl) and "1080" not in _format_used(fake_ydl)
 
 
+def test_paid_route_counts_piece_bytes_without_progress_events(main, fake_ydl, tmp_path, monkeypatch):
+    monkeypatch.setenv("PROXY_URL", "http://paid.invalid:2")
+
+    def fail(params):
+        if params.get("proxy") != "http://paid.invalid:2":
+            raise RuntimeError("Sign in to confirm you're not a bot")
+    fake_ydl.fail_extract = staticmethod(fail)
+    route = {}
+    main._download_youtube_video(YT, str(tmp_path), ranges=RANGES, route_out=route)
+    assert route["paid_bytes"] == 3 * 64  # the fake writes 64 bytes per piece and never reports progress
+
+
 def test_only_missing_ranges_are_retried(main, fake_ydl, tmp_path):
     fake_ydl.fail_sections = {2: 1}  # piece 2 fails once
     paths, _ = _run(main, tmp_path)

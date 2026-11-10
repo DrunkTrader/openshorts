@@ -59,6 +59,20 @@ def parse_route_line(line: str) -> Optional[dict]:
     return data if isinstance(data, dict) else None
 
 
+def merge_routes(prev: Optional[dict], new: dict) -> dict:
+    """One record for a job that downloaded twice (audio, then video pieces):
+    paid bytes summed, attempts joined, and a paid winner is not lost to a
+    later free one."""
+    if not prev:
+        return new
+    winner = new.get("winner")
+    if str(prev.get("winner") or "") in PAID_LABELS:
+        winner = prev["winner"]
+    return {**prev, **new, "winner": winner or prev.get("winner"),
+            "paid_bytes": paid_bytes_of(prev) + paid_bytes_of(new),
+            "attempts": list(prev.get("attempts") or []) + list(new.get("attempts") or [])}
+
+
 def paid_bytes_of(route: Optional[dict]) -> int:
     try:
         return int((route or {}).get("paid_bytes") or 0)

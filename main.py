@@ -1149,6 +1149,13 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                 ydl.process_ie_result(copy.deepcopy(info), download=True)
             record_pieces(output_dir, sanitized, ranges, [n for n in todo])
         missing = pending_pieces(output_dir, sanitized, ranges)
+        # yt-dlp's ffmpeg downloader reports only the finished piece's file
+        # size (and nothing for a piece that failed midway): never let a paid
+        # route read 0. A lower bound of the wire bytes, since the piece is
+        # re-encoded.
+        _dl_bytes["total"] = max(_dl_bytes["total"], sum(
+            os.path.getsize(piece_path(output_dir, sanitized, n))
+            for n in range(len(ranges)) if n not in missing))
         if len(missing) == len(ranges):
             raise RuntimeError("no range could be downloaded")
         _out["pieces"] = [None if n in missing else piece_path(output_dir, sanitized, n)

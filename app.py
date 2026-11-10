@@ -3083,7 +3083,9 @@ def enqueue_output(out, job_id):
                 if decoded_line.startswith("PROXY_BYTES="):
                     try:
                         if job_id in jobs:
-                            jobs[job_id]['proxy_bytes'] = int(decoded_line.split("=", 1)[1])
+                            # A range job downloads twice (audio, pieces): sum.
+                            jobs[job_id]['proxy_bytes'] = (jobs[job_id].get('proxy_bytes') or 0) \
+                                + int(decoded_line.split("=", 1)[1])
                     except ValueError:
                         pass
                     continue
@@ -3094,7 +3096,8 @@ def enqueue_output(out, job_id):
                         from cloud import proxy_ledger as _pl
                         route = _pl.parse_route_line(decoded_line)
                         if route is not None and job_id in jobs:
-                            jobs[job_id]['proxy_route'] = route
+                            jobs[job_id]['proxy_route'] = _pl.merge_routes(
+                                jobs[job_id].get('proxy_route'), route)
                     except Exception:
                         pass
                     continue
