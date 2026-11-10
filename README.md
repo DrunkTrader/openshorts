@@ -247,6 +247,10 @@ Navigate to **`http://localhost:5175`**
 4. **YouTube Studio**: Generate thumbnails, titles, and descriptions for YouTube
 5. **UGC Gallery**: Browse all generated videos and avatars
 
+### Running without Docker
+
+See [docs/native-install.md](docs/native-install.md) for Linux (incl. aarch64) and Windows.
+
 ### 5. GPU acceleration (optional, NVIDIA)
 
 The default image is CPU-only. With an NVIDIA card (any card with NVENC, e.g. RTX 4060) an 8-minute video clips in about a minute instead of 5 to 8. Nothing is passed through in the VM sense — the container just gets access to the host GPU.
