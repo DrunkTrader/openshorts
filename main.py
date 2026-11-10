@@ -2651,6 +2651,7 @@ if __name__ == '__main__':
         viewer_clips = twitch_signals.viewer_clips_for_job(args.url, 0)
 
     # 1. Get Input Video
+    source_pieces_used = []
     audio_path = None    # audio-first jobs keep it apart from the video
     range_mode = False   # audio-first URL job: input_video is the audio file
     source_meta = {}     # what the one extraction saw (duration, title, heatmap, chapters)
@@ -2921,10 +2922,29 @@ if __name__ == '__main__':
                 "Clip detection failed — the AI model did not return usable clips for this video.")
         else:
             print(f"🔥 Found {len(clips_data['shorts'])} clips!")
+            piece_for = {}      # clip index -> (piece file, piece start in source seconds)
+            source_pieces = []  # what metadata records for the editor
             if range_mode:
-                # Video is not downloaded range by range yet: whole source.
-                input_video, video_title, source_subtitle_band = _full_video_fallback()
-                range_mode = False
+                import source_ranges as sr
+                kept = sr.cap_total(sr.usable(clips_data['shorts']), duration)
+                if not kept:
+                    raise RuntimeError("Clip detection returned no clip with a usable length.")
+                merged = sr.merge_ranges(sr.pad_ranges(kept, duration))
+                print(f"✂️ ranges: {len(merged)} pieces, total {sr.total_seconds(merged):.0f}s "
+                      f"of {duration:.0f}s (padding {sr._env_float('RANGE_PAD_SECONDS', 10):.0f}s)")
+                piece_files, _ = download_youtube_video(args.url, output_dir, ranges=merged)
+                clips_data['shorts'] = []
+                for clip, (n, offset) in zip(kept, sr.assign(kept, merged)):
+                    if piece_files[n] is None:
+                        print(f"⚠️ clip dropped ({clip['start']}s-{clip['end']}s): range download failed")
+                        continue
+                    piece_for[len(clips_data['shorts'])] = (piece_files[n], offset)
+                    clips_data['shorts'].append(clip)
+                if not clips_data['shorts']:
+                    raise RuntimeError("No range could be downloaded for any clip.")
+                source_pieces = [{"file": os.path.basename(f), "start": merged[n][0], "end": merged[n][1]}
+                                 for n, f in enumerate(piece_files) if f]
+                source_pieces_used.extend(source_pieces)
 
             # Save metadata. Silent videos have no transcript → no subtitles,
             # which is correct (there's no speech to caption).
@@ -2933,7 +2953,10 @@ if __name__ == '__main__':
             # again and reproduce the render settings, so record both. The
             # basename is enough — the file sits in the job dir (URL jobs with
             # --keep-original) or in uploads/ (upload jobs).
-            clips_data['source_video'] = os.path.basename(input_video)
+            clips_data['source_video'] = os.path.basename(
+                source_pieces[0]["file"] if source_pieces else input_video)
+            if source_pieces:
+                clips_data['source_pieces'] = source_pieces
             clips_data['output_format'] = output_format
             if source_subtitle_band:
                 clips_data['source_subtitle_band'] = source_subtitle_band
@@ -2956,7 +2979,10 @@ if __name__ == '__main__':
 
                 try:
                     # ffmpeg cut — re-encoding for precision on strict seconds
-                    cut_clip(input_video, clip_temp_path, start, end, i + 1)
+                    # Range jobs cut from the padded piece, in piece time; the
+                    # clip dict and everything downstream keep source time.
+                    cut_src, offset = piece_for.get(i, (input_video, 0.0))
+                    cut_clip(cut_src, clip_temp_path, start - offset, end - offset, i + 1)
 
                     # Layer order: the canonical reframe stays CLEAN, the hook
                     # is a derived hooked_ file, captions go last on top of
@@ -3066,8 +3092,10 @@ if __name__ == '__main__':
                 write_json_atomic(metadata_file, clips_data, indent=2)
 
     # Clean up original if requested
-    if audio_path and not args.keep_original and os.path.exists(audio_path):
-        os.remove(audio_path)
+    if audio_path and not args.keep_original:
+        for f in [audio_path] + [os.path.join(output_dir, p["file"]) for p in source_pieces_used]:
+            if os.path.exists(f):
+                os.remove(f)
     if args.url and not args.keep_original and os.path.exists(input_video):
         os.remove(input_video)
         print(f"🗑️  Cleaned up downloaded video.")

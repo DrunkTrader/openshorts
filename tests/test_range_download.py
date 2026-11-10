@@ -1,4 +1,5 @@
 import os
+import shutil
 
 import pytest
 
@@ -86,3 +87,38 @@ def test_stock_range_func_gives_no_section_index():
     from yt_dlp.utils import download_range_func
     (first,) = download_range_func(None, [(0, 5)])({"duration": 10}, None)
     assert "index" not in first
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_precise_cut_from_padded_piece(tmp_path):
+    import subprocess
+    from ffmpeg_utils import cut_clip
+    # Luma encodes the source time as a 2 s sawtooth, so the first frame of a
+    # cut says where in the source it starts. Keyframes only every 5 s.
+    src = str(tmp_path / "src.mp4")
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error",
+                    "-f", "lavfi", "-i", "color=c=black:s=64x64:r=25:d=60,"
+                    "geq=lum='255*mod(T\\,2)/2':cb=128:cr=128",
+                    "-f", "lavfi", "-i", "sine=frequency=440:duration=60",
+                    "-force_key_frames", "expr:gte(t,n_forced*5)", "-pix_fmt", "yuv420p",
+                    "-c:v", "libx264", "-c:a", "aac", src], check=True)
+    start, end, pad = 23.28, 41.68, 10.0
+    piece_start = start - pad
+    piece = str(tmp_path / "piece.mp4")
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", str(piece_start),
+                    "-to", str(end + pad), "-i", src, "-c:v", "libx264", "-c:a", "aac", piece],
+                   check=True)
+    out = str(tmp_path / "clip.mp4")
+    cut_clip(piece, out, start - piece_start, end - piece_start, 1)
+
+    def probe(args):
+        return subprocess.check_output(["ffprobe", "-v", "error", *args], text=True).strip()
+    assert abs(float(probe(["-show_entries", "format=duration", "-of", "csv=p=0", out]))
+               - (end - start)) <= 0.1
+    def luma(path, *seek):
+        return subprocess.check_output(
+            ["ffmpeg", "-v", "error", *seek, "-i", path, "-frames:v", "1",
+             "-vf", "scale=1:1,format=gray", "-f", "rawvideo", "-"])[0]
+    # One frame (0.04 s) is 5 luma levels of the 2 s sawtooth.
+    assert abs(luma(out) - luma(src, "-ss", str(start))) <= 5
+    assert abs(luma(out) - luma(src, "-ss", str(start + 0.5))) > 20  # the check can fail
