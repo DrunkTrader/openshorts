@@ -1143,6 +1143,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             # A piece that fails is retried below; the others still land.
             ignoreerrors='only_download',
             outtmpl=os.path.join(output_dir, f'{sanitized}.piece_%(section_number)s.%(ext)s'))
+        fetched_here = set(pending_pieces(output_dir, sanitized, ranges))  # not from an earlier route or run
         for rnd in range(2):
             todo = pending_pieces(output_dir, sanitized, ranges)
             if not todo:
@@ -1162,7 +1163,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
         # re-encoded.
         _dl_bytes["total"] = max(_dl_bytes["total"], sum(
             os.path.getsize(piece_path(output_dir, sanitized, n))
-            for n in range(len(ranges)) if n not in missing))
+            for n in fetched_here if n not in missing))
         if len(missing) == len(ranges):
             raise RuntimeError("no range could be downloaded")
         _out["pieces"] = [None if n in missing else piece_path(output_dir, sanitized, n)
@@ -2916,15 +2917,12 @@ if __name__ == '__main__':
                   f"switching to visual analysis.")
             transcript = None
 
-        def _full_video_fallback():
-            """Range mode needs words to pick moments; without them (sparse
-            speech, no audio) the legacy path, which watches the video, takes over."""
-            v, t = download_youtube_video(args.url, output_dir)
-            return v, t, _probe_source(v)
-
-        if range_mode and transcript is None:
-            print("↩️ No usable speech: falling back to the full download.")
-            input_video, video_title, source_subtitle_band = _full_video_fallback()
+        import range_ingest
+        _full = range_ingest.full_download_fallback(
+            range_mode, transcript, lambda: download_youtube_video(args.url, output_dir))
+        if _full:
+            input_video, video_title = _full
+            source_subtitle_band = _probe_source(input_video)
             range_mode = False
 
         # 4. Gemini Analysis (transcript-driven, or vision for silent videos)
@@ -2957,8 +2955,18 @@ if __name__ == '__main__':
                     lambda merged: download_youtube_video(args.url, output_dir, ranges=merged)[0],
                     min_keep=min(n_picked, clip_count_targets(n_picked)[0]))
                 source_pieces_used.extend(source_pieces)
-                clips_data['source_url'] = args.url
-                clips_data['source_duration'] = duration
+                from reframe_v2 import source_already_fits  # imports main back
+
+                def _dims(path):
+                    _c = cv2.VideoCapture(path)
+                    try:
+                        return (int(_c.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                                int(_c.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+                    finally:
+                        _c.release()
+                source_subtitle_band = range_ingest.probe_pieces(
+                    output_dir, source_pieces, ASPECT_RATIO, source_already_fits, _dims,
+                    os.environ.get("AUTO_CAPTIONS", "1").strip() != "0")
 
             # Save metadata. Silent videos have no transcript → no subtitles,
             # which is correct (there's no speech to caption).
@@ -2967,10 +2975,8 @@ if __name__ == '__main__':
             # again and reproduce the render settings, so record both. The
             # basename is enough — the file sits in the job dir (URL jobs with
             # --keep-original) or in uploads/ (upload jobs).
-            clips_data['source_video'] = os.path.basename(
-                source_pieces[0]["file"] if source_pieces else input_video)
-            if source_pieces:
-                clips_data['source_pieces'] = source_pieces
+            range_ingest.record_source(clips_data, input_video, source_pieces,
+                                       args.url if range_mode else None, duration)
             clips_data['output_format'] = output_format
             if source_subtitle_band:
                 clips_data['source_subtitle_band'] = source_subtitle_band

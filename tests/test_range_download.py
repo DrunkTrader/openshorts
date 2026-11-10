@@ -60,6 +60,19 @@ def test_paid_route_counts_piece_bytes_without_progress_events(main, fake_ydl, t
     assert route["paid_bytes"] == 3 * 64  # the fake writes 64 bytes per piece and never reports progress
 
 
+def test_paid_floor_ignores_pieces_from_an_earlier_run(main, fake_ydl, tmp_path, monkeypatch):
+    _run(main, tmp_path, ranges=RANGES[:1])  # a free first run left piece 1 behind
+    monkeypatch.setenv("PROXY_URL", "http://paid.invalid:2")
+
+    def fail(params):
+        if params.get("proxy") != "http://paid.invalid:2":
+            raise RuntimeError("Sign in to confirm you're not a bot")
+    fake_ydl.fail_extract = staticmethod(fail)
+    route = {}
+    main._download_youtube_video(YT, str(tmp_path), ranges=RANGES, route_out=route)
+    assert route["paid_bytes"] == 2 * 64  # only pieces 2 and 3 crossed the paid route
+
+
 def test_only_missing_ranges_are_retried(main, fake_ydl, tmp_path):
     fake_ydl.fail_sections = {2: 1}  # piece 2 fails once
     paths, _ = _run(main, tmp_path)
