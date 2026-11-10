@@ -60,9 +60,7 @@
   /* hairline card, lit from within — replaces every glass/surface card */
   .card,
   .glass-panel {
-    background:
-      radial-gradient(120% 90% at 50% 0%, var(--color-paper-emit) 0%, transparent 70%),
-      var(--color-paper-2);
+    background: var(--color-paper-2);
     border: 1px solid var(--color-rule);
     border-radius: var(--radius-card);
     box-shadow: var(--shadow-card);
@@ -94,7 +92,7 @@
     letter-spacing: var(--tracking-micro);
     text-transform: uppercase;
     color: var(--color-ink);
-    opacity: 0.55;
+    opacity: 0.7;
   }
 
   /* mono value chip for machine data: 00:42 · 9:16 · $0.65 */
@@ -112,11 +110,10 @@
     border: 1px solid var(--color-rule-2);
     border-radius: var(--radius-input);
     padding: 0.75rem 1rem;
-    outline: none;
     transition: border-color var(--dur-short) var(--ease-out);
   }
   .input-field::placeholder { color: var(--color-muted); opacity: 0.7; }
-  .input-field:focus { border-color: var(--color-accent); box-shadow: 0 0 0 3px oklch(var(--c-accent) / 0.15); }
+  .input-field:focus { border-color: var(--color-ink); }
 
   .btn-primary {
     @apply inline-flex items-center justify-center gap-2 px-6 py-3 text-sm font-medium;
@@ -127,7 +124,7 @@
   }
   .btn-primary:hover { opacity: 0.88; }
   .btn-primary:active { transform: translateY(1px); }
-  .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn-primary:disabled { opacity: 1; cursor: not-allowed; background: var(--color-paper-3); color: var(--color-muted); box-shadow: inset 0 0 0 1px var(--color-rule-2); }
 
   .btn-ghost {
     @apply inline-flex items-center justify-center gap-2 px-6 py-3 text-sm font-medium text-ink;
@@ -159,11 +156,13 @@
 
   .badge-ok, .badge-warn, .badge-danger, .badge-brass, .badge-float {
     font-family: var(--font-mono);
-    font-size: 10.5px;
+    font-size: 11px;
     letter-spacing: var(--tracking-micro);
     text-transform: uppercase;
     border-radius: 999px;
     padding: 2px 10px;
+    border: 1px solid currentColor;
+    border-color: color-mix(in oklab, currentColor 28%, transparent);
     display: inline-flex;
     align-items: center;
     gap: 4px;
