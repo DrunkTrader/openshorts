@@ -7,7 +7,7 @@ import Skeleton from './ui/Skeleton';
 // The signed-in user's saved video library (stored in R2). Private, signed links.
 // Videos are grouped by project (job); re-openable projects get a "reopen"
 // action that restores the whole job for further editing in the Clip Generator.
-export default function HistoryTab({ onReopenProject }) {
+export default function HistoryTab({ onReopenProject, onCreate }) {
   const [videos, setVideos] = useState(null);
   const [projects, setProjects] = useState({});
   const [reopening, setReopening] = useState(null);
@@ -86,6 +86,7 @@ export default function HistoryTab({ onReopenProject }) {
         <div className="py-16 max-w-md">
           <h2 className="font-display text-4xl text-ink mb-2">No clips yet</h2>
           <p className="text-sm text-muted">Shorts you generate are saved here while your plan is active. Start from the Clip Generator.</p>
+          {onCreate && <button type="button" className="btn-primary px-5 py-2.5 text-sm mt-5" onClick={onCreate}>Create clips</button>}
         </div>
       )}
 

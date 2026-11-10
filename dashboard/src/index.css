@@ -124,7 +124,8 @@
   }
   .btn-primary:hover { opacity: 0.88; }
   .btn-primary:active { transform: translateY(1px); }
-  .btn-primary:disabled { opacity: 1; cursor: not-allowed; background: var(--color-paper-3); color: var(--color-muted); box-shadow: inset 0 0 0 1px var(--color-rule-2); }
+  .btn-primary:disabled { opacity: 1; cursor: not-allowed; background: transparent; color: var(--color-muted); box-shadow: none; border: 1px dashed var(--color-rule-2); }
+  .btn-primary:disabled:hover { opacity: 1; }
 
   .btn-ghost {
     @apply inline-flex items-center justify-center gap-2 px-6 py-3 text-sm font-medium text-ink;
