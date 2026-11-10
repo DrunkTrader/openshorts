@@ -68,10 +68,9 @@ def test_cookies_path_falls_back_to_temp_dir_without_app(monkeypatch, tmp_path):
     assert yt_clients.cookies_path() == "/x/c.txt"
 
 
-def test_cookies_file_is_written_private_and_never_logged(monkeypatch, tmp_path, capsys):
+def test_cookies_file_is_written_private_and_never_logged(main, monkeypatch, tmp_path, capsys):
     import os
     import stat
-    import main
     import yt_clients
     monkeypatch.delenv("COOKIES_FILE", raising=False)
     monkeypatch.setattr(yt_clients.os.path, "isdir", lambda p: False)  # no /app

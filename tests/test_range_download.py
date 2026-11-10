@@ -3,14 +3,13 @@ import shutil
 
 import pytest
 
-import main
 from test_audio_first import YT, fake_ydl  # noqa: F401  (fixture)
 from ydl_fakes import FakeYDL
 
 RANGES = [(0.0, 60.0), (100.0, 160.0), (300.0, 380.0)]
 
 
-def _run(tmp_path, ranges=RANGES):
+def _run(main, tmp_path, ranges=RANGES):
     return main._download_youtube_video(YT, str(tmp_path), ranges=ranges)
 
 
@@ -18,8 +17,8 @@ def _sections(fake, params):
     return list(params["download_ranges"]({}, None))
 
 
-def test_ranges_passed_with_exact_cuts_and_numbered_names(fake_ydl, tmp_path):
-    paths, title = _run(tmp_path)
+def test_ranges_passed_with_exact_cuts_and_numbered_names(main, fake_ydl, tmp_path):
+    paths, title = _run(main, tmp_path)
     (dl,) = [i for i in fake_ydl.instances if "process_ie_result" in i.calls]
     assert [(c["start_time"], c["end_time"]) for c in _sections(fake_ydl, dl.params)] == RANGES
     assert dl.params["force_keyframes_at_cuts"] is True
@@ -33,49 +32,49 @@ def _format_used(fake):
     return [i.params["format"] for i in fake.instances if "process_ie_result" in i.calls][-1]
 
 
-def test_format_is_1080p_off_the_paid_proxy(fake_ydl, tmp_path):
-    _run(tmp_path)
+def test_format_is_1080p_off_the_paid_proxy(main, fake_ydl, tmp_path):
+    _run(main, tmp_path)
     assert "height<=1080" in _format_used(fake_ydl) and "720" not in _format_used(fake_ydl)
 
 
-def test_format_is_720p_on_the_paid_proxy(fake_ydl, tmp_path, monkeypatch):
+def test_format_is_720p_on_the_paid_proxy(main, fake_ydl, tmp_path, monkeypatch):
     monkeypatch.setenv("PROXY_URL", "http://paid.invalid:2")
 
     def fail(params):
         if params.get("proxy") != "http://paid.invalid:2":
             raise RuntimeError("Sign in to confirm you're not a bot")
     fake_ydl.fail_extract = staticmethod(fail)
-    _run(tmp_path)
+    _run(main, tmp_path)
     assert "height<=720" in _format_used(fake_ydl) and "1080" not in _format_used(fake_ydl)
 
 
-def test_only_missing_ranges_are_retried(fake_ydl, tmp_path):
+def test_only_missing_ranges_are_retried(main, fake_ydl, tmp_path):
     fake_ydl.fail_sections = {2: 1}  # piece 2 fails once
-    paths, _ = _run(tmp_path)
+    paths, _ = _run(main, tmp_path)
     assert all(paths)
     sessions = [i for i in fake_ydl.instances if "process_ie_result" in i.calls]
     assert len(sessions) == 2
     assert [c["index"] for c in _sections(fake_ydl, sessions[1].params)] == [2]
 
 
-def test_piece_that_keeps_failing_is_dropped_not_fatal(fake_ydl, tmp_path):
+def test_piece_that_keeps_failing_is_dropped_not_fatal(main, fake_ydl, tmp_path):
     fake_ydl.fail_sections = {2: 5}
-    paths, _ = _run(tmp_path)
+    paths, _ = _run(main, tmp_path)
     assert [p is None for p in paths] == [False, True, False]
 
 
-def test_job_fails_only_when_every_piece_fails(fake_ydl, tmp_path):
+def test_job_fails_only_when_every_piece_fails(main, fake_ydl, tmp_path):
     fake_ydl.fail_sections = {1: 99, 2: 99, 3: 99}
     with pytest.raises(RuntimeError, match="no range"):
-        _run(tmp_path)
+        _run(main, tmp_path)
 
 
-def test_existing_pieces_are_reused_for_the_same_ranges(fake_ydl, tmp_path):
-    _run(tmp_path)
+def test_existing_pieces_are_reused_for_the_same_ranges(main, fake_ydl, tmp_path):
+    _run(main, tmp_path)
     fake_ydl.instances.clear()
-    _run(tmp_path)
+    _run(main, tmp_path)
     assert not [i for i in fake_ydl.instances if "process_ie_result" in i.calls]
-    _run(tmp_path, ranges=[(0.0, 60.0), (100.0, 170.0), (300.0, 380.0)])
+    _run(main, tmp_path, ranges=[(0.0, 60.0), (100.0, 170.0), (300.0, 380.0)])
     (dl,) = [i for i in fake_ydl.instances if "process_ie_result" in i.calls]
     assert [c["index"] for c in _sections(fake_ydl, dl.params)] == [2]
 
@@ -84,6 +83,8 @@ def test_stock_range_func_gives_no_section_index():
     # Why main yields its own sections: yt-dlp names a piece from the range's
     # `index`, which download_range_func never sets, so %(section_number)s
     # would be NA for every piece and each one would overwrite the last.
+    if not getattr(pytest.importorskip("yt_dlp"), "__file__", None):
+        pytest.skip("yt_dlp is stubbed here")
     from yt_dlp.utils import download_range_func
     (first,) = download_range_func(None, [(0, 5)])({"duration": 10}, None)
     assert "index" not in first
