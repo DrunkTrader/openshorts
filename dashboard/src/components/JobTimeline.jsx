@@ -2,7 +2,8 @@ import { STAGES } from '../lib/jobStage';
 
 // Live stage timeline: queued -> transcribing -> scoring -> rendering -> done.
 // The current step carries aria-current="step"; finished steps are filled.
-export default function JobTimeline({ info }) {
+// compact: narrow column, only the current step keeps its visible label.
+export default function JobTimeline({ info, compact = false }) {
   const { index, failed, detail, pct } = info;
   return (
     <div className="mb-4">
@@ -29,7 +30,7 @@ export default function JobTimeline({ info }) {
                     : current ? (failed ? 'bg-danger border-danger' : 'bg-brass border-brass ring-4 ring-brass/20')
                       : 'bg-paper2 border-rule2'}`}
               />
-              <span className={`mt-2 text-[11px] sm:text-xs leading-tight transition-colors duration-200 ${current ? 'text-ink font-medium' : done ? 'text-ink2' : 'text-muted'}`}>
+              <span className={`mt-2 text-[11px] sm:text-xs leading-tight transition-colors duration-200 ${compact && !current && !(s.id === 'done' && index === 4) ? 'sr-only' : ''} ${current ? 'text-ink font-medium' : done ? 'text-ink2' : 'text-muted'}`}>
                 {s.label}
               </span>
             </li>

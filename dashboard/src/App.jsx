@@ -2182,7 +2182,7 @@ function App() {
                   />
                 )}
 
-                <JobTimeline info={jobInfo} />
+                <JobTimeline info={jobInfo} compact={status === 'complete'} />
 
                 {/* The render is dead time: the user is watching a progress bar
                     with nothing to do, so this is where the one star ask goes. */}
@@ -2388,6 +2388,7 @@ function App() {
                         <ResultCard
                           key={`${jobId}-${i}-${clip.video_url || ''}`}
                           clip={clip}
+                          stacked={status !== 'complete'}
                           index={i}
                           jobId={jobId}
                           onEditClip={(index) => setEditingClip(index)}
