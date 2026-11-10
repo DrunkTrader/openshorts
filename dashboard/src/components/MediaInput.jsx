@@ -156,22 +156,22 @@ export default function MediaInput({ onProcess, isProcessing }) {
                 <button
                     onClick={() => setMode('file')}
                     className={`flex items-center gap-2 pb-3 px-1 -mb-px border-b-2 text-sm lowercase whitespace-nowrap transition-colors ${mode === 'file'
-                        ? 'text-ink border-brass'
+                        ? 'text-ink border-ink'
                         : 'text-muted border-transparent hover:text-ink2'
                         }`}
                 >
-                    <Upload size={16} className={`hidden sm:block ${mode === 'file' ? 'text-brass' : ''}`} />
+                    <Upload size={16} className={`hidden sm:block ${mode === 'file' ? 'text-ink' : ''}`} />
                     Upload File
                 </button>
                 {youtubeUrlEnabled && (
                     <button
                         onClick={() => setMode('url')}
                         className={`flex items-center gap-2 pb-3 px-1 -mb-px border-b-2 text-sm lowercase whitespace-nowrap transition-colors ${mode === 'url'
-                            ? 'text-ink border-brass'
+                            ? 'text-ink border-ink'
                             : 'text-muted border-transparent hover:text-ink2'
                             }`}
                     >
-                        <Link2 size={16} className={`hidden sm:block ${mode === 'url' ? 'text-brass' : ''}`} />
+                        <Link2 size={16} className={`hidden sm:block ${mode === 'url' ? 'text-ink' : ''}`} />
                         Video URL
                     </button>
                 )}
@@ -219,7 +219,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                 ) : (
                     <div
                         data-tutorial="drop-zone"
-                        className={`border-2 border-dashed rounded-card p-6 sm:p-8 text-center transition-colors ${file ? 'border-brass' : 'border-rule2 hover:border-brass'
+                        className={`border-2 border-dashed rounded-card p-6 sm:p-8 text-center transition-colors ${file ? 'border-ink' : 'border-rule2 hover:border-ink'
                             }`}
                         onDragOver={(e) => e.preventDefault()}
                         onDrop={handleDrop}
