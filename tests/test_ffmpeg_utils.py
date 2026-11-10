@@ -284,6 +284,8 @@ WRAPPER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 
 def _wrapped(tmp_path, threads, *args):
+    if os.name == "nt":
+        pytest.skip("bin/ffmpeg is a POSIX sh wrapper")
     echo = tmp_path / "echo-ffmpeg"
     echo.write_text('#!/bin/sh\nfor a in "$@"; do printf \'%s\\n\' "$a"; done\n')
     echo.chmod(0o755)

@@ -141,7 +141,7 @@ def test_render_timeout_falls_back(monkeypatch, tmp_path):
 
 
 def test_nvenc_slot_takes_a_free_lock(monkeypatch, tmp_path):
-    import fcntl
+    fcntl = pytest.importorskip("fcntl")
     monkeypatch.setenv("NVENC_SLOTS", "2")
     monkeypatch.setenv("NVENC_LOCK_DIR", str(tmp_path))
     busy = open(tmp_path / ".nvenc-0.lock", "a")

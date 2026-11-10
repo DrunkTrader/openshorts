@@ -3062,7 +3062,7 @@ def enqueue_output(out, job_id):
     """Reads output from a subprocess and appends it to jobs logs."""
     try:
         for line in iter(out.readline, b''):
-            decoded_line = _scrub_secrets(line.decode('utf-8').strip())
+            decoded_line = _scrub_secrets(line.decode('utf-8', errors='replace').strip())
             if decoded_line:
                 # Internal marker from main.py's downloader, not a log line.
                 # Internal marker: a clip finished its whole chain and this is
@@ -3118,6 +3118,16 @@ def _job_nice():
         return 10
 
 
+def _child_env(env, nt=None):
+    """Job child env. A piped Windows stdout defaults to cp1252 and main.py
+    prints emoji, which would kill the job with UnicodeEncodeError."""
+    env = dict(env)
+    if os.name == "nt" if nt is None else nt:
+        env.setdefault("PYTHONUTF8", "1")
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+    return env
+
+
 def _lower_priority():
     n = _job_nice()
     if n:
@@ -3134,6 +3144,8 @@ def _job_encode_env(env):
     off."""
     env = dict(env)
     slots = os.environ.get("JOB_NVENC_SLOTS", "4").strip()
+    if os.name == "nt":  # slots use fcntl locks, POSIX only
+        return env
     env["NVENC_SLOTS"] = slots if slots.isdigit() else "4"
     env["NVENC_LOCK_DIR"] = os.path.abspath(OUTPUT_DIR)
     return env
@@ -3155,7 +3167,7 @@ async def run_job(job_id, job_data):
     """Executes the subprocess for a specific job."""
 
     cmd = job_data['cmd']
-    env = _job_encode_env(job_data['env'])
+    env = _child_env(_job_encode_env(job_data['env']))
     if await _paid_proxy_budget_exceeded():
         # The daily paid-proxy budget ran out while this job was queued.
         env.pop("PROXY_URL", None)

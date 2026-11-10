@@ -1,11 +1,12 @@
 """NVENC encode slots: bin/ffmpeg caps how many job encodes share the card."""
-import fcntl
 import os
 import shutil
 import subprocess
 import time
 
 import pytest
+
+fcntl = pytest.importorskip("fcntl")  # POSIX-only: slot locks and the sh wrapper
 
 WRAPPER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "bin", "ffmpeg")

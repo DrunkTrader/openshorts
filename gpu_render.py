@@ -352,7 +352,11 @@ def nvenc_slot():
     if slots <= 0 or not lock_dir or not os.path.isdir(lock_dir) or not os.access(lock_dir, os.W_OK):
         yield
         return
-    import fcntl
+    try:
+        import fcntl
+    except ImportError:  # Windows: no host-wide slots
+        yield
+        return
     try:
         max_wait = int(os.environ.get("NVENC_SLOT_WAIT", "600"))
     except ValueError:
