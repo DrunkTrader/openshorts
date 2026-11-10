@@ -3172,7 +3172,7 @@ async def run_job(job_id, job_data):
             stderr=subprocess.STDOUT, # Merge stderr to stdout
             env=env,
             cwd=os.getcwd(),
-            preexec_fn=_lower_priority,
+            preexec_fn=_lower_priority if os.name != "nt" else None,
         )
         
         # We need to capture logs in a thread because Popen isn't async
