@@ -754,6 +754,17 @@ def _file_stamp(path):
         return None
 
 
+def probe_media_duration(path):
+    """Seconds in ``path`` per ffprobe, or 0.0 when it cannot be read."""
+    try:
+        out = subprocess.check_output(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nw=1:nk=1", path], timeout=60)
+        return float(out.decode().strip())
+    except Exception:
+        return 0.0
+
+
 def cap_source_duration(input_video, max_minutes, safety=False, start_seconds=0.0):
     """Cut ``input_video`` down to its first ``max_minutes`` minutes, in place.
 
@@ -862,15 +873,33 @@ def _content_block(error_text):
     return None
 
 
+# The audio track alone: the early-audio thread and the audio-first ingest.
+AUDIO_FORMAT = 'bestaudio[ext=m4a]/bestaudio'
+
+
+def use_range_download(args, env, billing):
+    """True when a URL job fetches audio first and only the chosen ranges of
+    video after (self-host YouTube). Cloud keeps the full download (metering,
+    source caps and the resume manifest all assume one source file)."""
+    url = getattr(args, "url", None)
+    return bool(url and is_youtube_url(url) and not billing
+                and env.get("RANGE_DOWNLOAD", "1").strip() != "0"
+                and not args.skip_analysis and not args.transcript
+                and not env.get("MAX_SOURCE_MINUTES", "").strip()
+                and not env.get("SOURCE_CAP_MINUTES", "").strip())
+
+
 def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
-                           cap_minutes=None, route_out=None):
+                           cap_minutes=None, route_out=None, audio_only=False,
+                           meta_out=None):
     """Download ``url`` with only public addresses resolvable (ssrf_guard): the
     checked URL is not the only one yt-dlp talks to (redirects, URLs read out
     of an extracted page, a DNS answer that changes after the check)."""
     import ssrf_guard
     with ssrf_guard.guarded():
         return _download_youtube_video(url, output_dir, on_audio=on_audio, allow_paid=allow_paid,
-                                       cap_minutes=cap_minutes, route_out=route_out)
+                                       cap_minutes=cap_minutes, route_out=route_out,
+                                       audio_only=audio_only, meta_out=meta_out)
 
 
 def _write_cookies_file(cookies_path):
@@ -896,7 +925,8 @@ def _write_cookies_file(cookies_path):
 
 
 def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
-                            cap_minutes=None, route_out=None):
+                            cap_minutes=None, route_out=None, audio_only=False,
+                            meta_out=None):
     """
     Downloads a YouTube video using yt-dlp.
     Returns the path to the downloaded video and the video title.
@@ -911,6 +941,12 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     budget hit), ``cap_minutes`` bounds the fetch like ``SOURCE_CAP_MINUTES``,
     and ``route_out`` (a dict) receives the route summary so the caller can
     record paid bytes in the proxy ledger.
+
+    ``audio_only``: fetch just the audio track (same attempt ladder, same
+    routes) and return ``(audio_path, title)``. Audio is REQUIRED here, so it
+    may take the paid route when direct and static fail, like a video would.
+    ``meta_out`` (a dict) receives what the single extraction saw: duration,
+    title, heatmap, chapters, extractor, id.
     """
     # SSRF guard: block non-http(s) schemes and private/loopback/metadata hosts
     # before handing the URL to yt-dlp.
@@ -1020,6 +1056,9 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                                       or d.get('downloaded_bytes') or 0)
 
     _early = {"started": False}
+    if audio_only:
+        on_audio = None  # the audio IS the download
+    _out = {"path": None}
 
     # A job only paid for so many minutes (MAX_SOURCE_MINUTES: the quota-wall
     # offer; SOURCE_CAP_MINUTES: every metered job, a safety cap). yt-dlp used
@@ -1052,7 +1091,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             opts = {
                 **_base_opts(extractor_args, proxy, cookies),
                 'quiet': True, 'verbose': False, 'noprogress': True,
-                'format': 'bestaudio[ext=m4a]/bestaudio',
+                'format': AUDIO_FORMAT,
                 'outtmpl': os.path.join(output_dir, '.early_audio.%(ext)s'),
                 'overwrites': True,
             }
@@ -1077,6 +1116,9 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
         # clients, API JSON, m3u8), 4-9 s of round trips per attempt.
         with yt_dlp.YoutubeDL(_base_opts(extractor_args, proxy, cookies)) as ydl:
             info = ydl.extract_info(url, download=False, process=False)
+        if isinstance(meta_out, dict):
+            meta_out.update({k: info.get(k) for k in ('duration', 'title', 'heatmap', 'chapters', 'id')})
+            meta_out['extractor'] = info.get('extractor_key') or info.get('ie_key')
         # Media URLs another program will fetch (ffmpeg on a ranged or HLS
         # download) resolve outside the Python guard: check them here. YouTube's
         # own CDN hosts are skipped (dozens of them, never internal).
@@ -1090,7 +1132,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
         # on a 19-min cap took 8 min ranged against ~30 s whole (prod,
         # 25-sep-2026); a finished 6.7 h livestream is ~13 GB whole.
         ranged = False
-        if _range_cap:
+        if _range_cap and not audio_only:
             _dur = info.get('duration')
             ranged = not _dur or float(_dur) > max(3 * _range_cap, _range_cap + 2700)
         # Once per download, and not on the per-GB proxy (that is paid bytes,
@@ -1102,7 +1144,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             threading.Thread(target=_early_audio, args=(info, extractor_args, proxy, cookies),
                              daemon=True).start()
         expected = os.path.join(output_dir, f'{sanitized}.mp4')
-        if os.path.exists(expected):
+        if os.path.exists(expected) and not audio_only:
             os.remove(expected)
         dl_opts = {
             **_base_opts(extractor_args, proxy, cookies),
@@ -1111,6 +1153,10 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             'merge_output_format': 'mp4', 'overwrites': True,
             'progress_hooks': [_progress_hook],
         }
+        if audio_only:
+            del dl_opts['merge_output_format']
+            dl_opts.update(format=AUDIO_FORMAT,
+                           outtmpl=os.path.join(output_dir, f'{sanitized}.audio.%(ext)s'))
         if ranged:
             from yt_dlp.utils import download_range_func
             dl_opts['download_ranges'] = download_range_func(None, [(0, _range_cap)])
@@ -1118,9 +1164,15 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                   f": downloading only the first {_range_cap / 60:.0f} min.")
         with yt_dlp.YoutubeDL(dl_opts) as ydl:
             if info.get('_type', 'video') == 'video' and info.get('formats'):
-                ydl.process_ie_result(info, download=True)
+                res = ydl.process_ie_result(info, download=True)
             else:
+                res = None
                 ydl.download([url])
+        if audio_only:
+            _out["path"] = ((((res or {}).get('requested_downloads') or [{}])[0]).get('filepath')
+                            or (res or {}).get('filepath'))
+            if not _out["path"] or not os.path.exists(_out["path"]):
+                raise RuntimeError("audio-only download produced no file")
         return sanitized
 
     # DIRECT_FIRST=1: try the server's own IP before spending proxy bandwidth.
@@ -1246,6 +1298,9 @@ Technical Details: {str(last_err)}
         # Machine-parseable marker consumed by app.py's log reader for the
         # monthly proxy-bandwidth counter. Not shown to clients (log filter).
         print(f"PROXY_BYTES={paid_bytes}")
+    if audio_only:
+        print(f"✅ Audio downloaded in {time.time() - step_start_time:.2f}s: {_out['path']}")
+        return _out["path"], sanitized_title
     print(f"✅ Video downloaded in {time.time() - step_start_time:.2f}s: {downloaded_file}")
     return downloaded_file, sanitized_title
 
@@ -2543,6 +2598,9 @@ if __name__ == '__main__':
         viewer_clips = twitch_signals.viewer_clips_for_job(args.url, 0)
 
     # 1. Get Input Video
+    audio_path = None    # audio-first jobs keep it apart from the video
+    range_mode = False   # audio-first URL job: input_video is the audio file
+    source_meta = {}     # what the one extraction saw (duration, title, heatmap, chapters)
     if args.url:
         # For multi-clip runs, treat --output as an OUTPUT DIRECTORY (create it if needed).
         # For whole-video runs (--skip-analysis), --output can be a file path.
@@ -2596,8 +2654,22 @@ if __name__ == '__main__':
                      and os.environ.get("EARLY_AUDIO", "1").strip() != "0"
                      and not os.environ.get("MAX_SOURCE_MINUTES", "").strip()
                      and not os.path.exists(os.path.join(output_dir, TRANSCRIPT_CHECKPOINT)))
-        input_video, video_title = download_youtube_video(
-            args.url, output_dir, on_audio=_on_audio if use_early else None)
+        range_mode = use_range_download(args, os.environ,
+                                        os.environ.get("BILLING_ENABLED", "").lower() in ("1", "true", "yes"))
+        if range_mode:
+            # Audio first: transcription and the pick need no video. The video
+            # comes after the pick, and only as far as the picked clips need.
+            try:
+                input_video, video_title = download_youtube_video(
+                    args.url, output_dir, audio_only=True, meta_out=source_meta)
+            except Exception as e:
+                if "format is not available" not in str(e):
+                    raise
+                print("⚠️ No audio-only stream: downloading the whole video instead.")
+                range_mode = False
+        if not range_mode:
+            input_video, video_title = download_youtube_video(
+                args.url, output_dir, on_audio=_on_audio if use_early else None)
     else:
         input_video = args.input
         video_title = os.path.splitext(os.path.basename(input_video))[0]
@@ -2638,46 +2710,53 @@ if __name__ == '__main__':
         if _stamp(input_video) != _before and globals().get("early") is not None:
             early["invalid"] = True  # its words cover the part that was cut off
 
-    # Layout choice is per SOURCE video, not per clip: one upload and one call
-    # instead of one per clip, and the answer is a property of the material
-    # ("this is a screencast"), which does not change between its own clips.
-    # It runs before any render so the modules are switched on in time.
-    if layout_picker.ENABLED:
-        try:
-            _cap = cv2.VideoCapture(input_video)
-            _fps = _cap.get(cv2.CAP_PROP_FPS) or 30.0
-            _duration = int(_cap.get(cv2.CAP_PROP_FRAME_COUNT)) / _fps
-            _w = int(_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            _h = int(_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            _cap.release()
-            from reframe_v2 import source_already_fits  # imports main back
-            # A source already shot vertical has no width to reorganise, and
-            # the render passes it through whatever the model says. Asking
-            # anyway costs a Gemini call per upload to be ignored.
-            if _w and _h and source_already_fits(_w, _h, ASPECT_RATIO):
-                print(f"   ↕️  Source is {_w}x{_h} — already vertical, no layout to pick.")
-            else:
-                layout_picker.pick_and_apply(input_video, _duration)
-        except Exception as e:
-            print(f"⚠️ Layout choice skipped ({e}) — using the default layout.")
+    def _probe_source(input_video):
+        """Per-source decisions that need frames: the layout picker and the
+        burned-in subtitle band. Returns the band (or None)."""
+        # Layout choice is per SOURCE video, not per clip: one upload and one call
+        # instead of one per clip, and the answer is a property of the material
+        # ("this is a screencast"), which does not change between its own clips.
+        # It runs before any render so the modules are switched on in time.
+        if layout_picker.ENABLED:
+            try:
+                _cap = cv2.VideoCapture(input_video)
+                _fps = _cap.get(cv2.CAP_PROP_FPS) or 30.0
+                _duration = int(_cap.get(cv2.CAP_PROP_FRAME_COUNT)) / _fps
+                _w = int(_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                _h = int(_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                _cap.release()
+                from reframe_v2 import source_already_fits  # imports main back
+                # A source already shot vertical has no width to reorganise, and
+                # the render passes it through whatever the model says. Asking
+                # anyway costs a Gemini call per upload to be ignored.
+                if _w and _h and source_already_fits(_w, _h, ASPECT_RATIO):
+                    print(f"   ↕️  Source is {_w}x{_h} — already vertical, no layout to pick.")
+                else:
+                    layout_picker.pick_and_apply(input_video, _duration)
+            except Exception as e:
+                print(f"⚠️ Layout choice skipped ({e}) — using the default layout.")
 
-    # Subtitles already burned into the source: trim them off each cut clip so
-    # our captions are the only text layer (burned_subtitles.py). Only when we
-    # caption at all, and never on a vertical source, which is passed through.
-    source_subtitle_band = None
-    if (not args.skip_analysis
-            and os.environ.get("AUTO_CAPTIONS", "1").strip() != "0"):
-        try:
-            import burned_subtitles
-            _cap = cv2.VideoCapture(input_video)
-            _w = int(_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            _h = int(_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            _cap.release()
-            from reframe_v2 import source_already_fits
-            if not (_w and _h and source_already_fits(_w, _h, ASPECT_RATIO)):
-                source_subtitle_band = burned_subtitles.detect(input_video)
-        except Exception as e:
-            print(f"⚠️ Burned-in subtitle check skipped ({e}).")
+        # Subtitles already burned into the source: trim them off each cut clip so
+        # our captions are the only text layer (burned_subtitles.py). Only when we
+        # caption at all, and never on a vertical source, which is passed through.
+        source_subtitle_band = None
+        if (not args.skip_analysis
+                and os.environ.get("AUTO_CAPTIONS", "1").strip() != "0"):
+            try:
+                import burned_subtitles
+                _cap = cv2.VideoCapture(input_video)
+                _w = int(_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                _h = int(_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                _cap.release()
+                from reframe_v2 import source_already_fits
+                if not (_w and _h and source_already_fits(_w, _h, ASPECT_RATIO)):
+                    source_subtitle_band = burned_subtitles.detect(input_video)
+            except Exception as e:
+                print(f"⚠️ Burned-in subtitle check skipped ({e}).")
+
+        return source_subtitle_band
+
+    source_subtitle_band = None if range_mode else _probe_source(input_video)
 
     # 2. Decision: Analyze clips or process whole?
     if args.skip_analysis:
@@ -2692,11 +2771,22 @@ if __name__ == '__main__':
         render_clip(input_video, output_file, output_format)
     else:
         # Get duration (needed by both the transcript and the vision path).
-        cap = cv2.VideoCapture(input_video)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        duration = frame_count / fps
-        cap.release()
+        if range_mode:
+            audio_path = input_video
+            duration = probe_media_duration(audio_path)
+            meta_duration = source_meta.get('duration')
+            if meta_duration and duration and abs(float(meta_duration) - duration) >= 2:
+                print(f"⚠️ Audio is {duration:.0f}s but the page says {float(meta_duration):.0f}s: "
+                      f"trusting the audio.")
+            duration = duration or float(meta_duration or 0)
+            if duration <= 0:
+                raise RuntimeError("Could not read the duration of the downloaded audio.")
+        else:
+            cap = cv2.VideoCapture(input_video)
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            duration = frame_count / fps
+            cap.release()
 
         # 3. Transcribe — unless the video has no audio, in which case fall back
         # to Gemini vision (picks clips from the imagery instead of the speech).
@@ -2748,6 +2838,17 @@ if __name__ == '__main__':
                   f"switching to visual analysis.")
             transcript = None
 
+        def _full_video_fallback():
+            """Range mode needs words to pick moments; without them (sparse
+            speech, no audio) the legacy path, which watches the video, takes over."""
+            v, t = download_youtube_video(args.url, output_dir)
+            return v, t, _probe_source(v)
+
+        if range_mode and transcript is None:
+            print("↩️ No usable speech: falling back to the full download.")
+            input_video, video_title, source_subtitle_band = _full_video_fallback()
+            range_mode = False
+
         # 4. Gemini Analysis (transcript-driven, or vision for silent videos)
         early_clips = (early_state or {}).get("clips") if early_state else None
         if (transcript is not None and early_clips
@@ -2767,6 +2868,10 @@ if __name__ == '__main__':
                 "Clip detection failed — the AI model did not return usable clips for this video.")
         else:
             print(f"🔥 Found {len(clips_data['shorts'])} clips!")
+            if range_mode:
+                # Video is not downloaded range by range yet: whole source.
+                input_video, video_title, source_subtitle_band = _full_video_fallback()
+                range_mode = False
 
             # Save metadata. Silent videos have no transcript → no subtitles,
             # which is correct (there's no speech to caption).
@@ -2908,6 +3013,8 @@ if __name__ == '__main__':
                 write_json_atomic(metadata_file, clips_data, indent=2)
 
     # Clean up original if requested
+    if audio_path and not args.keep_original and os.path.exists(audio_path):
+        os.remove(audio_path)
     if args.url and not args.keep_original and os.path.exists(input_video):
         os.remove(input_video)
         print(f"🗑️  Cleaned up downloaded video.")
