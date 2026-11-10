@@ -2240,7 +2240,7 @@ function App() {
                     )}
                   </h2>
                   {results?.clips?.length > 0 && status === 'complete' && (
-                    <div className="flex flex-col sm:flex-row sm:justify-end items-stretch sm:items-center gap-2">
+                    <div className="flex flex-row sm:justify-end items-stretch sm:items-center gap-2 [&>button]:flex-1 sm:[&>button]:flex-none">
                       <button
                         onClick={handleDownloadAll}
                         disabled={downloadingAll}
