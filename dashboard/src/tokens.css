@@ -55,7 +55,7 @@
   --font-body: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
   --text-display: clamp(3rem, 6vw + 1rem, 6rem);
-  --tracking-display: -0.03em;
+  --tracking-display: -0.018em;
   --tracking-micro: 0.08em;
   --leading-body: 1.6;
 
