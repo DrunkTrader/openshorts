@@ -873,6 +873,28 @@ def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                                        cap_minutes=cap_minutes, route_out=route_out)
 
 
+def _write_cookies_file(cookies_path):
+    """Write YOUTUBE_COOKIES to ``cookies_path`` (utf-8, owner-only) and return
+    the path, or None when unset or unwritable."""
+    cookies_env = os.environ.get("YOUTUBE_COOKIES")
+    if not cookies_env:
+        print("⚠️ YOUTUBE_COOKIES env var not found.")
+        return None
+    print("🍪 Found YOUTUBE_COOKIES env var, creating cookies file...")
+    try:
+        fd = os.open(cookies_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write(cookies_env)
+        os.chmod(cookies_path, 0o600)  # the file may have existed with looser bits
+        # Never print file CONTENT here: with a headerless cookies
+        # blob this would leak live YouTube session cookies to logs.
+        print(f"   Debug: Cookies file created. Size: {os.path.getsize(cookies_path)} bytes")
+        return cookies_path
+    except Exception as e:
+        print(f"⚠️ Failed to write cookies file: {e}")
+        return None
+
+
 def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                             cap_minutes=None, route_out=None):
     """
@@ -910,22 +932,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
 
     from yt_clients import cookies_path as _cookies_path
     cookies_path = _cookies_path()
-    cookies_env = os.environ.get("YOUTUBE_COOKIES")
-    if cookies_env:
-        print("🍪 Found YOUTUBE_COOKIES env var, creating cookies file inside container...")
-        try:
-            with open(cookies_path, 'w') as f:
-                f.write(cookies_env)
-            if os.path.exists(cookies_path):
-                 # Never print file CONTENT here: with a headerless cookies
-                 # blob this would leak live YouTube session cookies to logs.
-                 print(f"   Debug: Cookies file created. Size: {os.path.getsize(cookies_path)} bytes")
-        except Exception as e:
-            print(f"⚠️ Failed to write cookies file: {e}")
-            cookies_path = None
-    else:
-        cookies_path = None
-        print("⚠️ YOUTUBE_COOKIES env var not found.")
+    cookies_path = _write_cookies_file(cookies_path)
     
     # Optional HTTP proxy. Set PROXY_URL to route downloads through it; unset
     # (self-host) goes direct as before.

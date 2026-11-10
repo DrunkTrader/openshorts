@@ -66,3 +66,27 @@ def test_cookies_path_falls_back_to_temp_dir_without_app(monkeypatch, tmp_path):
     assert path == str(tmp_path / "openshorts_cookies.txt")
     monkeypatch.setenv("COOKIES_FILE", "/x/c.txt")
     assert yt_clients.cookies_path() == "/x/c.txt"
+
+
+def test_cookies_file_is_written_private_and_never_logged(monkeypatch, tmp_path, capsys):
+    import os
+    import stat
+    import main
+    import yt_clients
+    monkeypatch.delenv("COOKIES_FILE", raising=False)
+    monkeypatch.setattr(yt_clients.os.path, "isdir", lambda p: False)  # no /app
+    monkeypatch.setattr(yt_clients.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setenv("YOUTUBE_COOKIES", "SECRET-SESSION-é")
+    path = yt_clients.cookies_path()
+    open(path, "w").close()
+    if os.name != "nt":
+        os.chmod(path, 0o644)  # pre-existing loose file must be tightened
+
+    assert main._write_cookies_file(path) == path
+    with open(path, encoding="utf-8") as f:
+        assert f.read() == "SECRET-SESSION-é"
+    if os.name != "nt":
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    assert "SECRET-SESSION" not in capsys.readouterr().out
+    monkeypatch.delenv("YOUTUBE_COOKIES")
+    assert main._write_cookies_file(path) is None
