@@ -191,8 +191,28 @@ def sample_frames(video_path, n=None, width=None):
     return out
 
 
+def sample_frames_pieces(paths, n=None, width=None):
+    """The same ``n`` frames, shared out over the pieces of a range job.
+
+    Equal share per piece (the remainder goes to the first ones); with more
+    pieces than frames, ``n`` pieces evenly spread get one each. Frames of one
+    piece are spread inside it, so nothing comes from outside a piece.
+    """
+    n = n or SAMPLE_FRAMES
+    paths = list(paths)
+    if len(paths) > n:
+        paths = [paths[int(i * len(paths) / n)] for i in range(n)]
+    out = []
+    for i, path in enumerate(paths):
+        share = n // len(paths) + (1 if i < n % len(paths) else 0)
+        out += sample_frames(path, share, width)
+    return out
+
+
 def pick(video_path, video_duration):
     """The layout Gemini picks for this video, or "none" on any failure.
+
+    ``video_path`` may be a list of piece files (range jobs).
 
     Never raises: a missing answer has to degrade to today's routing rather
     than break the job.
@@ -212,7 +232,8 @@ def pick(video_path, video_duration):
         from google.genai import types as genai_types
         import gemini_worker
 
-        frames = sample_frames(video_path)
+        frames = (sample_frames_pieces(video_path) if isinstance(video_path, (list, tuple))
+                  else sample_frames(video_path))
         if not frames:
             print("   ⚠️ No readable frames — keeping the default layout.")
             return "none"

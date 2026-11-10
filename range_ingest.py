@@ -56,3 +56,51 @@ def cleanup(output_dir, audio_path, pieces, keep_source):
             os.remove(f)
         except OSError:
             pass
+
+
+def probe_pieces(output_dir, pieces, aspect, fits, dims, captions_on):
+    """The picks that need frames (layout picker, burned-in subtitle band),
+    run once on the pieces. A vertical first piece skips both, as the
+    whole-source path does. Returns the subtitle band or None."""
+    import burned_subtitles
+    import layout_picker
+
+    paths = [os.path.join(output_dir, p["file"]) for p in pieces]
+    seconds = sum(p["end"] - p["start"] for p in pieces)
+    if layout_picker.ENABLED or captions_on:
+        w, h = dims(paths[0])
+        if w and h and fits(w, h, aspect):
+            if layout_picker.ENABLED:
+                print(f"   ↕️  Source is {w}x{h} — already vertical, no layout to pick.")
+            return None
+    if layout_picker.ENABLED:
+        try:
+            layout_picker.pick_and_apply(paths, seconds)
+        except Exception as e:
+            print(f"⚠️ Layout choice skipped ({e}) — using the default layout.")
+    if captions_on:
+        try:
+            largest = max(zip(pieces, paths), key=lambda pp: pp[0]["end"] - pp[0]["start"])[1]
+            return burned_subtitles.detect(largest)
+        except Exception as e:
+            print(f"⚠️ Burned-in subtitle check skipped ({e}).")
+    return None
+
+
+def record_source(clips_data, input_video, pieces, url=None, duration=None):
+    """The source keys the editor and recut read back from the metadata."""
+    clips_data['source_video'] = os.path.basename(pieces[0]["file"] if pieces else input_video)
+    if pieces:
+        clips_data['source_pieces'] = pieces
+        clips_data['source_url'] = url
+        clips_data['source_duration'] = duration
+
+
+def full_download_fallback(range_mode, transcript, download_full):
+    """Range mode needs words to pick moments. Without them (sparse speech,
+    no audio) the legacy path, which watches the video, takes over:
+    ``(video, title)`` from ``download_full()``, or None when not needed."""
+    if range_mode and transcript is None:
+        print("↩️ No usable speech: falling back to the full download.")
+        return download_full()
+    return None
