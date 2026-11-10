@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 /**
@@ -21,6 +22,10 @@ const SIZES = {
   xl: 'max-w-5xl',
 };
 
+// Open modals, topmost last: Escape closes only the top one. The page behind
+// is inert and scroll-locked while any is open.
+const stack = [];
+
 export default function Modal({ isOpen, onClose, returnFocusRef, title, eyebrow, size = 'md', children, footer, hideClose = false }) {
   const panelRef = useRef(null);
   const closeRef = useRef(onClose);
@@ -38,9 +43,20 @@ export default function Modal({ isOpen, onClose, returnFocusRef, title, eyebrow,
     const fallback = returnFocusRef?.current;
     panelRef.current?.focus();
     const onKey = (e) => { if (e.key === 'Escape' && closeRef.current) { e.stopPropagation(); closeRef.current(); } };
-    document.addEventListener('keydown', onKey);
+    const token = {};
+    stack.push(token);
+    const root = document.getElementById('root');
+    root?.setAttribute('inert', '');
+    document.body.style.overflow = 'hidden';
+    const onKeyTop = (e) => { if (stack[stack.length - 1] === token) onKey(e); };
+    document.addEventListener('keydown', onKeyTop);
     return () => {
-      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('keydown', onKeyTop);
+      stack.splice(stack.indexOf(token), 1);
+      if (!stack.length) {
+        root?.removeAttribute('inert');
+        document.body.style.overflow = '';
+      }
       const back = opener instanceof HTMLElement && document.contains(opener) && opener !== document.body ? opener : fallback;
       if (back instanceof HTMLElement) back.focus();
     };
@@ -49,7 +65,9 @@ export default function Modal({ isOpen, onClose, returnFocusRef, title, eyebrow,
 
   if (!isOpen) return null;
 
-  return (
+  // Portalled: a transformed or overflow-hidden ancestor (a hovered card) must
+  // not become the containing block of `fixed`.
+  return createPortal(
     /* Phone: a bottom sheet — anchored to the thumb, edge to edge, and free to
        run taller than a centred dialog whose 4px side margins wasted the only
        width there was. From sm up it is the centred dialog it always was. */
@@ -95,6 +113,7 @@ export default function Modal({ isOpen, onClose, returnFocusRef, title, eyebrow,
         )}
         {!footer && <div className="sm:hidden safe-bottom" />}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
