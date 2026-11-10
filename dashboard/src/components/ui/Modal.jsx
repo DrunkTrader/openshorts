@@ -21,22 +21,29 @@ const SIZES = {
   xl: 'max-w-5xl',
 };
 
-export default function Modal({ isOpen, onClose, title, eyebrow, size = 'md', children, footer, hideClose = false }) {
+export default function Modal({ isOpen, onClose, returnFocusRef, title, eyebrow, size = 'md', children, footer, hideClose = false }) {
   const panelRef = useRef(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
+  // Captured during render, before any child effect can move focus (a child
+  // that focuses itself would otherwise become the "opener" and vanish on close).
+  const openerRef = useRef(null);
+  if (isOpen && !openerRef.current && typeof document !== 'undefined') openerRef.current = document.activeElement;
+  if (!isOpen) openerRef.current = null;
 
   // Escape closes; focus moves into the dialog and returns to the opener.
   useEffect(() => {
     if (!isOpen) return undefined;
-    const opener = document.activeElement;
+    const opener = openerRef.current;
     panelRef.current?.focus();
     const onKey = (e) => { if (e.key === 'Escape' && closeRef.current) { e.stopPropagation(); closeRef.current(); } };
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('keydown', onKey);
-      if (opener instanceof HTMLElement && document.contains(opener)) opener.focus();
+      const back = opener instanceof HTMLElement && document.contains(opener) && opener !== document.body ? opener : returnFocusRef?.current;
+      if (back instanceof HTMLElement) back.focus();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
   if (!isOpen) return null;

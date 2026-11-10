@@ -240,6 +240,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     const [isHooking, setIsHooking] = useState(false);
     const [isTranslating, setIsTranslating] = useState(false);
     const [showHookModal, setShowHookModal] = useState(false);
+    const hookBtnRef = React.useRef(null);
     const [showTranslateModal, setShowTranslateModal] = useState(false);
     const [editError, setEditError] = useState(null);
 
@@ -999,6 +1000,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     </button>
 
                     <button
+                        ref={hookBtnRef}
                         onClick={() => setShowHookModal(true)}
                         disabled={isHooking}
                         className={QUIET_BTN}
@@ -1221,6 +1223,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             />
 
             <HookModal
+                returnFocusRef={hookBtnRef}
                 isOpen={showHookModal}
                 onClose={() => setShowHookModal(false)}
                 onGenerate={handleHook}
