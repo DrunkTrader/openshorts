@@ -19,7 +19,18 @@ npm run lint                     # ESLint, --max-warnings 0
 pip install -r requirements.txt
 uvicorn app:app --host 0.0.0.0 --port 8000
 pytest tests/ -v                 # CI runs this without the heavy ML stack
+pytest tests/test_clip_floor.py -v               # one file (add -k <name> for one test)
+
+# Light test env, same as CI (no torch/ultralytics/mediapipe/faster-whisper):
+pip install pytest pillow httpx pydantic sqlalchemy greenlet numpy opencv-python-headless \
+  python-dotenv google-genai fastapi boto3 PyJWT email-validator python-multipart
 ```
+
+- Pipeline modules import the ML stack lazily behind feature gates, and tests exercise the gated-off paths: keep new heavy imports inside functions or CI breaks.
+- CI (`.github/workflows/`) runs `pytest` (Python 3.11) and `npm run build` (Node 20); it does not lint, so run `npm run lint` yourself.
+- DB schema is created with `create_all` at boot (`cloud/database.py`): changes to `cloud/models.py` must be additive. `alembic/` has no migrations yet.
+- Remotion compositions exist twice, `remotion/` (server render) and `dashboard/src/remotion/` (in-browser preview/render), and have already drifted (`lib/fonts.ts`, `lib/types.ts`): change both.
+- `cli/` is the `openshorts` PyPI CLI, published by pushing a `cli-vX.Y.Z` tag matching `cli/pyproject.toml`.
 
 ## Pipeline
 
