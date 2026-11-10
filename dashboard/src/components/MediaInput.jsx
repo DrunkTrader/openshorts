@@ -12,11 +12,16 @@ const SUPPORTED_PLATFORMS = [
     'Facebook', 'Instagram', 'Dailymotion', 'Reddit', 'Streamable',
 ];
 
-// Mirrors the server's MIN_SOURCE_SECONDS: shorter sources are rejected with a
+// Mirrors MIN_SOURCE_SECONDS in app.py (default 45, env-overridable): shorter sources are rejected with a
 // 400 after the whole file was uploaded. Checking the duration in the browser
 // says so the moment the file is picked (a 27 s upload used to end in a bare
 // "That run failed").
 const MIN_SOURCE_SECONDS = 45;
+
+const store = {
+    get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
+    set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
+};
 
 // Duration of a local video file in seconds, or null when the browser cannot
 // read it (unsupported codec): then the server stays the judge.
@@ -32,6 +37,12 @@ const readVideoDuration = (file) => new Promise((resolve) => {
         v.src = url;
     } catch { resolve(null); }
 });
+
+const FORMATS = [
+    { value: 'vertical', label: '9:16', hint: 'Shorts · Reels · TikTok', w: 9, h: 16 },
+    { value: 'square', label: '1:1', hint: 'Feed posts', w: 13, h: 13 },
+    { value: 'horizontal', label: '16:9', hint: 'Keep landscape · YouTube', w: 18, h: 10 },
+];
 
 export default function MediaInput({ onProcess, isProcessing }) {
     const [youtubeUrlEnabled, setYoutubeUrlEnabled] = useState(true);
@@ -54,9 +65,9 @@ export default function MediaInput({ onProcess, isProcessing }) {
     // Advanced generation controls — empty string means "let the AI decide",
     // which keeps the default pipeline behavior untouched.
     const [showAdvanced, setShowAdvanced] = useState(false);
-    const [targetClips, setTargetClips] = useState('');
-    const [clipMinSeconds, setClipMinSeconds] = useState('');
-    const [clipMaxSeconds, setClipMaxSeconds] = useState('');
+    const [targetClips, setTargetClips] = useState(() => store.get('os_target_clips', ''));
+    const [clipMinSeconds, setClipMinSeconds] = useState(() => store.get('os_clip_min', ''));
+    const [clipMaxSeconds, setClipMaxSeconds] = useState(() => store.get('os_clip_max', ''));
     // Auto-hook: burn the AI hook text into every clip. On by default; the
     // choice persists so turning it off sticks across sessions.
     const [autoHook, setAutoHook] = useState(() => {
@@ -73,6 +84,16 @@ export default function MediaInput({ onProcess, isProcessing }) {
         try { return localStorage.getItem('os_layout') || 'auto'; } catch { return 'auto'; }
     });
     const infoRef = useRef(null);
+
+    // Advanced options persist as they change, not only on submit.
+    useEffect(() => {
+        store.set('os_target_clips', targetClips);
+        store.set('os_clip_min', clipMinSeconds);
+        store.set('os_clip_max', clipMaxSeconds);
+        store.set('os_layout', layout);
+        store.set('os_auto_hook', autoHook ? '1' : '0');
+        store.set('os_auto_hook_style_v2', autoHookStyle);
+    }, [targetClips, clipMinSeconds, clipMaxSeconds, layout, autoHook, autoHookStyle]);
 
     // Close the compatibility popover on any outside click.
     useEffect(() => {
@@ -150,11 +171,6 @@ export default function MediaInput({ onProcess, isProcessing }) {
             sourceStart: range ? Math.round(range.start) : null,
             sourceEnd: range ? Math.round(range.end) : null,
         };
-        try {
-            localStorage.setItem('os_auto_hook', autoHook ? '1' : '0');
-            localStorage.setItem('os_auto_hook_style_v2', autoHookStyle);
-            localStorage.setItem('os_layout', layout);
-        } catch { /* ignore */ }
         if (mode === 'url' && url) {
             onProcess({ type: 'url', payload: url.trim(), acknowledged: true, outputFormat, ...advanced });
         } else if (mode === 'file' && file && !fileTooShort) {
@@ -174,7 +190,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
         pickFile(e.dataTransfer.files?.[0]);
     };
 
-    const fmtSize = (b) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1e6))} MB`);
+    const fmtSize = (b) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : b >= 1e6 ? `${Math.round(b / 1e6)} MB` : `${Math.max(1, Math.round(b / 1e3))} KB`);
     const empty = mode === 'url' && !url.trim();
     const advancedSet = targetClips || clipMinSeconds || clipMaxSeconds || !autoHook || layout !== 'auto';
 
@@ -196,7 +212,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                 <FileVideo size={18} className="shrink-0 text-muted" aria-hidden="true" />
                                 <span className="font-medium text-sm text-ink truncate min-w-0 flex-1">{file.name}</span>
                                 <span className="readout tabular shrink-0">
-                                    {fmtSize(file.size)}{fileSeconds != null ? ` · ${Math.floor(fileSeconds / 60)}:${String(Math.round(fileSeconds % 60)).padStart(2, '0')}` : ''}
+                                    {fmtSize(file.size)}{fileSeconds != null ? ` · ${Math.floor(Math.round(fileSeconds) / 60)}:${String(Math.round(fileSeconds) % 60).padStart(2, '0')}` : ''}
                                 </span>
                                 <button
                                     type="button"
@@ -288,15 +304,13 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     onRangeChange={setRange}
                 />
 
-                {/* Output format selector */}
-                <div className="mt-4" data-tutorial="output-format">
-                    <p className="eyebrow mb-2">Output format</p>
+                {/* Output format: one compact row, the selected one names its destinations */}
+                <div className="mt-4" data-tutorial="output-format" role="group" aria-label="Output format">
+                    <p className="eyebrow mb-2">
+                        Output format <span className="normal-case tracking-normal opacity-80">· {FORMATS.find((f) => f.value === outputFormat).hint}</span>
+                    </p>
                     <div className="grid grid-cols-3 gap-2">
-                        {[
-                            { value: 'vertical', label: '9:16', hint: 'Shorts · Reels · TikTok', w: 18, h: 32 },
-                            { value: 'square', label: '1:1', hint: 'Feed posts', w: 28, h: 28 },
-                            { value: 'horizontal', label: '16:9', hint: 'Keep landscape · YouTube', w: 36, h: 20 },
-                        ].map((f) => {
+                        {FORMATS.map((f) => {
                             const active = outputFormat === f.value;
                             return (
                                 <button
@@ -304,21 +318,15 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                     type="button"
                                     aria-pressed={active}
                                     onClick={() => setOutputFormat(f.value)}
-                                    className={`py-3 px-2 rounded-input border flex flex-col items-center gap-2 transition-colors
-                                        ${active ? 'border-ink text-ink' : 'border-rule2 text-muted hover:border-ink'}`}
+                                    className={`h-11 rounded-input border flex items-center justify-center gap-2.5 transition-colors duration-150
+                                        ${active ? 'border-ink bg-paper3 text-ink' : 'border-rule2 text-muted hover:border-ink hover:text-ink'}`}
                                 >
-                                    {/* Aspect-ratio glyph */}
                                     <span
-                                        className="rounded-[3px] border-2 transition-colors"
-                                        style={{
-                                            width: `${f.w}px`,
-                                            height: `${f.h}px`,
-                                            borderColor: active ? 'var(--color-ink)' : 'var(--color-rule-2)',
-                                            backgroundColor: active ? 'color-mix(in srgb, var(--color-ink) 14%, transparent)' : 'transparent',
-                                        }}
+                                        aria-hidden="true"
+                                        className="rounded-[2px] border-[1.5px] border-current shrink-0"
+                                        style={{ width: `${f.w}px`, height: `${f.h}px` }}
                                     />
-                                    <span className="block font-mono text-sm leading-none">{f.label}</span>
-                                    <span className="block text-[11px] sm:text-[10px] leading-tight text-center text-muted">{f.hint}</span>
+                                    <span className="font-mono text-sm leading-none">{f.label}</span>
                                 </button>
                             );
                         })}
