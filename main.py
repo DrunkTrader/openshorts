@@ -1013,6 +1013,8 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     # "Video unavailable" on a share of videos, from every IP, and that was
     # what fed the per-GB proxy (6-sep-2026, verified in the prod container).
     from yt_clients import hd_extractor_args, fallback_extractor_args
+    from yt_clients import js_runtimes
+    _js = js_runtimes()
     hd_args = hd_extractor_args(_bgutil_http, _bgutil_script)
     fallback_args = fallback_extractor_args(_bgutil_http, _bgutil_script)
 
@@ -1045,6 +1047,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             # playlist's), paying for all of them and keeping the last.
             'noplaylist': True,
             'extractor_args': extractor_args,
+            **({'js_runtimes': _js} if _js else {}),
             'http_headers': {
                 'User-Agent': (
                     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '

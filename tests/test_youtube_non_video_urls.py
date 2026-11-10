@@ -87,3 +87,15 @@ class TestTheProbeRefusesBeforeAnyRequest:
         assert "search" in str(exc.value)
         assert calls == []
         assert metering.pop_paid_probe_events() == []
+
+
+def test_js_runtime_follows_what_is_on_path(monkeypatch):
+    import shutil
+    import yt_clients
+    paths = {"node": "/x/node"}
+    monkeypatch.setattr(shutil, "which", lambda n: paths.get(n))
+    assert yt_clients.js_runtimes() == {"node": {}}
+    paths["deno"] = "/x/deno"
+    assert yt_clients.js_runtimes() == {"deno": {}}
+    paths.clear()
+    assert yt_clients.js_runtimes() == {}
