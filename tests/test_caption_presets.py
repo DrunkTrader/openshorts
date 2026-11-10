@@ -6,7 +6,7 @@ from subtitles import AUTO_CAPTION_STYLE, CAPTION_PRESETS, line_budget
 
 
 def test_dashboard_offers_every_server_preset():
-    src = open("dashboard/src/components/SubtitleModal.jsx").read()
+    src = open("dashboard/src/components/SubtitleModal.jsx", encoding="utf-8").read()
     ids = set(re.findall(r"\{ id: '([a-z]+)'", src))
     missing = set(CAPTION_PRESETS) - ids
     assert not missing, f"presets the dashboard does not offer: {missing}"
