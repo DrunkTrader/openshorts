@@ -6,6 +6,7 @@ precise cut has frames on both sides, overlapping or close pieces are merged
 minutes is cheap), and a total cap keeps a long selection from turning back
 into a full download.
 """
+import json
 import os
 
 from clip_selection import trim_to_best
@@ -86,3 +87,50 @@ def cap_total(shorts, duration, pad=None, gap=None, max_total=None):
         print(f"✂️ Range cap: keeping {len(keep)} of {len(shorts)} clips "
               f"(pieces would exceed {max_total:.0f}s).")
     return keep
+
+
+# Pieces on disk: <title>.piece_<n>.mp4 (n from 1), plus a sidecar saying which
+# range each one holds, so a resumed job reuses a piece only for the same range.
+def piece_path(output_dir, title, n):
+    return os.path.join(output_dir, f"{title}.piece_{n + 1}.mp4")
+
+
+def _sidecar(output_dir, title):
+    return os.path.join(output_dir, f"{title}.pieces.json")
+
+
+def _load(output_dir, title):
+    try:
+        with open(_sidecar(output_dir, title)) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def _present(output_dir, title, n):
+    p = piece_path(output_dir, title, n)
+    return os.path.isfile(p) and os.path.getsize(p) > 0
+
+
+def pending_pieces(output_dir, title, ranges):
+    """Indices of ``ranges`` whose piece is missing, empty or from another range."""
+    done = _load(output_dir, title)
+    out = []
+    for n, (s, e) in enumerate(ranges):
+        got = done.get(str(n))
+        if not (_present(output_dir, title, n) and got
+                and abs(got[0] - s) < 0.01 and abs(got[1] - e) < 0.01):
+            out.append(n)
+    return out
+
+
+def record_pieces(output_dir, title, ranges, attempted):
+    """Note the range of every attempted piece that now exists."""
+    done = _load(output_dir, title)
+    for n in attempted:
+        if _present(output_dir, title, n):
+            done[str(n)] = list(ranges[n])
+        else:
+            done.pop(str(n), None)
+    with open(_sidecar(output_dir, title), "w") as f:
+        json.dump(done, f)

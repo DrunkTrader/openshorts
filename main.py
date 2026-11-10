@@ -891,7 +891,7 @@ def use_range_download(args, env, billing):
 
 def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                            cap_minutes=None, route_out=None, audio_only=False,
-                           meta_out=None):
+                           meta_out=None, ranges=None):
     """Download ``url`` with only public addresses resolvable (ssrf_guard): the
     checked URL is not the only one yt-dlp talks to (redirects, URLs read out
     of an extracted page, a DNS answer that changes after the check)."""
@@ -899,7 +899,7 @@ def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     with ssrf_guard.guarded():
         return _download_youtube_video(url, output_dir, on_audio=on_audio, allow_paid=allow_paid,
                                        cap_minutes=cap_minutes, route_out=route_out,
-                                       audio_only=audio_only, meta_out=meta_out)
+                                       audio_only=audio_only, meta_out=meta_out, ranges=ranges)
 
 
 def _write_cookies_file(cookies_path):
@@ -926,7 +926,7 @@ def _write_cookies_file(cookies_path):
 
 def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                             cap_minutes=None, route_out=None, audio_only=False,
-                            meta_out=None):
+                            meta_out=None, ranges=None):
     """
     Downloads a YouTube video using yt-dlp.
     Returns the path to the downloaded video and the video title.
@@ -947,6 +947,15 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     may take the paid route when direct and static fail, like a video would.
     ``meta_out`` (a dict) receives what the single extraction saw: duration,
     title, heatmap, chapters, extractor, id.
+
+    ``ranges`` (a list of ``(start, end)`` seconds): fetch only those pieces,
+    in one session, each re-encoded from its requested start
+    (``force_keyframes_at_cuts``), and return ``(paths, title)`` with one path
+    per range (None for a piece that failed twice). Same attempt ladder and
+    1080p/720p format rule as a whole download. ffmpeg fetches ranged streams
+    at roughly 1-2.5x realtime, so the caller merges close ranges and caps the
+    total (source_ranges); that is what keeps this far below a full download.
+    Pieces already on disk for the same range are reused (a resumed job).
     """
     # SSRF guard: block non-http(s) schemes and private/loopback/metadata hosts
     # before handing the URL to yt-dlp.
@@ -1056,9 +1065,9 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                                       or d.get('downloaded_bytes') or 0)
 
     _early = {"started": False}
-    if audio_only:
-        on_audio = None  # the audio IS the download
-    _out = {"path": None}
+    if audio_only or ranges is not None:
+        on_audio = None  # the audio IS the download / the video is not whole
+    _out = {"path": None, "pieces": None}
 
     # A job only paid for so many minutes (MAX_SOURCE_MINUTES: the quota-wall
     # offer; SOURCE_CAP_MINUTES: every metered job, a safety cap). yt-dlp used
@@ -1108,6 +1117,44 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             print(f"   ℹ️ Early audio skipped ({type(e).__name__}: {e}) — "
                   f"transcribing once the video is in.")
 
+    def _attempt_ranges(info, dl_opts, sanitized):
+        """One ranged session over the pieces still missing, then one more
+        for what failed, after a pause (politeness on bot checks). Raises when
+        no piece exists at all, so the ladder moves to the next route."""
+        import copy
+        import random
+        from source_ranges import piece_path, pending_pieces, record_pieces
+
+        def _sections(inf, ydl, todo):
+            for n in todo:
+                yield {'start_time': ranges[n][0], 'end_time': ranges[n][1], 'index': n + 1}
+
+        dl_opts.update(
+            # Without a keyframe at the cut the piece starts up to a GOP early
+            # and every offset after it is wrong.
+            force_keyframes_at_cuts=True,
+            # A piece that fails is retried below; the others still land.
+            ignoreerrors='only_download',
+            outtmpl=os.path.join(output_dir, f'{sanitized}.piece_%(section_number)s.%(ext)s'))
+        for rnd in range(2):
+            todo = pending_pieces(output_dir, sanitized, ranges)
+            if not todo:
+                break
+            if rnd:
+                pause = random.uniform(5, 15)
+                print(f"⏳ {len(todo)} piece(s) missing: retrying them in {pause:.0f}s.")
+                time.sleep(pause)
+            dl_opts['download_ranges'] = lambda inf, ydl, todo=todo: _sections(inf, ydl, todo)
+            with yt_dlp.YoutubeDL(dl_opts) as ydl:
+                ydl.process_ie_result(copy.deepcopy(info), download=True)
+            record_pieces(output_dir, sanitized, ranges, [n for n in todo])
+        missing = pending_pieces(output_dir, sanitized, ranges)
+        if len(missing) == len(ranges):
+            raise RuntimeError("no range could be downloaded")
+        _out["pieces"] = [None if n in missing else piece_path(output_dir, sanitized, n)
+                          for n in range(len(ranges))]
+        return sanitized
+
     def _attempt(extractor_args, fmt, proxy, cookies=True):
         _dl_bytes["total"] = 0
         _dl_bytes["partial"] = 0
@@ -1132,7 +1179,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
         # on a 19-min cap took 8 min ranged against ~30 s whole (prod,
         # 25-sep-2026); a finished 6.7 h livestream is ~13 GB whole.
         ranged = False
-        if _range_cap and not audio_only:
+        if _range_cap and not audio_only and ranges is None:
             _dur = info.get('duration')
             ranged = not _dur or float(_dur) > max(3 * _range_cap, _range_cap + 2700)
         # Once per download, and not on the per-GB proxy (that is paid bytes,
@@ -1144,7 +1191,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             threading.Thread(target=_early_audio, args=(info, extractor_args, proxy, cookies),
                              daemon=True).start()
         expected = os.path.join(output_dir, f'{sanitized}.mp4')
-        if os.path.exists(expected) and not audio_only:
+        if os.path.exists(expected) and not audio_only and ranges is None:
             os.remove(expected)
         dl_opts = {
             **_base_opts(extractor_args, proxy, cookies),
@@ -1153,6 +1200,8 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             'merge_output_format': 'mp4', 'overwrites': True,
             'progress_hooks': [_progress_hook],
         }
+        if ranges is not None:
+            return _attempt_ranges(info, dl_opts, sanitized)
         if audio_only:
             del dl_opts['merge_output_format']
             dl_opts.update(format=AUDIO_FORMAT,
@@ -1298,6 +1347,10 @@ Technical Details: {str(last_err)}
         # Machine-parseable marker consumed by app.py's log reader for the
         # monthly proxy-bandwidth counter. Not shown to clients (log filter).
         print(f"PROXY_BYTES={paid_bytes}")
+    if ranges is not None:
+        print(f"✅ {sum(p is not None for p in _out['pieces'])}/{len(ranges)} pieces downloaded "
+              f"in {time.time() - step_start_time:.2f}s.")
+        return _out["pieces"], sanitized_title
     if audio_only:
         print(f"✅ Audio downloaded in {time.time() - step_start_time:.2f}s: {_out['path']}")
         return _out["path"], sanitized_title
