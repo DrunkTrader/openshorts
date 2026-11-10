@@ -27,6 +27,22 @@ jobs:
       - name: Run tests
         run: pytest tests/ -v
 
+  # Native Windows: same dependency list as backend-tests (keep in sync).
+  backend-tests-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: >
+          pip install pytest pillow httpx pydantic sqlalchemy greenlet numpy
+          opencv-python-headless python-dotenv google-genai fastapi boto3
+          PyJWT email-validator python-multipart
+      - name: Run tests
+        run: pytest tests/ -v
+
   frontend-build:
     runs-on: ubuntu-latest
     defaults:
