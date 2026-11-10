@@ -873,6 +873,10 @@ def _content_block(error_text):
     return None
 
 
+class NoAudioFormat(Exception):
+    """The source lists formats but no audio-only stream: no route can fix it."""
+
+
 # The audio track alone: the early-audio thread and the audio-first ingest.
 AUDIO_FORMAT = 'bestaudio[ext=m4a]/bestaudio'
 
@@ -1173,6 +1177,11 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
         if isinstance(meta_out, dict):
             meta_out.update({k: info.get(k) for k in ('duration', 'title', 'heatmap', 'chapters', 'id')})
             meta_out['extractor'] = info.get('extractor_key') or info.get('ie_key')
+        formats = info.get('formats') or []
+        if audio_only and formats and not any(
+                f.get('vcodec') == 'none' and f.get('acodec') not in (None, 'none')
+                for f in formats):
+            raise NoAudioFormat("the source has no audio-only stream")
         # Media URLs another program will fetch (ffmpeg on a ranged or HLS
         # download) resolve outside the Python guard: check them here. YouTube's
         # own CDN hosts are skipped (dozens of them, never internal).
@@ -1295,11 +1304,15 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                                     "paid": proxy is not None and proxy == _proxy,
                                     "error": str(e)[:300]})
                 print(f"⚠️  Download attempt '{label}' failed: {str(e)[:200]}")
+                if isinstance(e, NoAudioFormat):
+                    break
                 retryable = '403' in str(e) or 'Forbidden' in str(e)
                 if not retryable or retry == 1:
                     break
                 time.sleep(3)
         if sanitized_title is not None:
+            break
+        if isinstance(last_err, NoAudioFormat):
             break
         # The video itself is off limits: another route (or the paid proxy)
         # cannot change that, so stop instead of spending every attempt.
@@ -1310,6 +1323,9 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
         # A failed download still paid for its proxied attempts.
         route_out.update({"winner": None, "attempts": attempt_log, "paid_bytes": sum(
             int(a.get("bytes") or 0) for a in attempt_log if a.get("paid"))})
+
+    if sanitized_title is None and isinstance(last_err, NoAudioFormat):
+        raise last_err
 
     if sanitized_title is None and last_err is not None and _content_block(str(last_err)):
         print(f"❌ {_content_block(str(last_err))}")
@@ -2723,9 +2739,7 @@ if __name__ == '__main__':
             try:
                 input_video, video_title = download_youtube_video(
                     args.url, output_dir, audio_only=True, meta_out=source_meta)
-            except Exception as e:
-                if "format is not available" not in str(e):
-                    raise
+            except NoAudioFormat:
                 print("⚠️ No audio-only stream: downloading the whole video instead.")
                 range_mode = False
         if not range_mode:
@@ -2932,26 +2946,15 @@ if __name__ == '__main__':
             piece_for = {}      # clip index -> (piece file, piece start in source seconds)
             source_pieces = []  # what metadata records for the editor
             if range_mode:
-                import source_ranges as sr
-                kept = sr.cap_total(sr.usable(clips_data['shorts']), duration)
-                if not kept:
-                    raise RuntimeError("Clip detection returned no clip with a usable length.")
-                merged = sr.merge_ranges(sr.pad_ranges(kept, duration))
-                print(f"✂️ ranges: {len(merged)} pieces, total {sr.total_seconds(merged):.0f}s "
-                      f"of {duration:.0f}s (padding {sr._env_float('RANGE_PAD_SECONDS', 10):.0f}s)")
-                piece_files, _ = download_youtube_video(args.url, output_dir, ranges=merged)
-                clips_data['shorts'] = []
-                for clip, (n, offset) in zip(kept, sr.assign(kept, merged)):
-                    if piece_files[n] is None:
-                        print(f"⚠️ clip dropped ({clip['start']}s-{clip['end']}s): range download failed")
-                        continue
-                    piece_for[len(clips_data['shorts'])] = (piece_files[n], offset)
-                    clips_data['shorts'].append(clip)
-                if not clips_data['shorts']:
-                    raise RuntimeError("No range could be downloaded for any clip.")
-                source_pieces = [{"file": os.path.basename(f), "start": merged[n][0], "end": merged[n][1]}
-                                 for n, f in enumerate(piece_files) if f]
+                import range_ingest
+                from clip_selection import clip_count_targets
+                n_picked = len(clips_data['shorts'])
+                clips_data['shorts'], piece_for, source_pieces = range_ingest.plan_pieces(
+                    clips_data['shorts'], duration,
+                    lambda merged: download_youtube_video(args.url, output_dir, ranges=merged)[0],
+                    min_keep=min(n_picked, clip_count_targets(n_picked)[0]))
                 source_pieces_used.extend(source_pieces)
+                clips_data['source_url'] = args.url
 
             # Save metadata. Silent videos have no transcript → no subtitles,
             # which is correct (there's no speech to caption).
@@ -3099,10 +3102,9 @@ if __name__ == '__main__':
                 write_json_atomic(metadata_file, clips_data, indent=2)
 
     # Clean up original if requested
-    if audio_path and not args.keep_original:
-        for f in [audio_path] + [os.path.join(output_dir, p["file"]) for p in source_pieces_used]:
-            if os.path.exists(f):
-                os.remove(f)
+    if audio_path:
+        import range_ingest
+        range_ingest.cleanup(output_dir, audio_path, source_pieces_used, args.keep_original)
     if args.url and not args.keep_original and os.path.exists(input_video):
         os.remove(input_video)
         print(f"🗑️  Cleaned up downloaded video.")

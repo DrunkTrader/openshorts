@@ -39,7 +39,8 @@ def fake_ydl(main, monkeypatch, tmp_path):
     FakeYDL.fail_sections = {}
     FakeYDL.info = {"id": "abc123", "title": "Talk", "duration": 300, "heatmap": [{"value": 1}],
                     "chapters": [{"title": "Intro"}], "extractor_key": "Youtube",
-                    "formats": [{"format_id": "1"}], "_type": "video"}
+                    "formats": [{"format_id": "1", "vcodec": "avc1", "acodec": "none"},
+                            {"format_id": "2", "vcodec": "none", "acodec": "mp4a"}], "_type": "video"}
     monkeypatch.setattr(main.yt_dlp, "YoutubeDL", FakeYDL)
     monkeypatch.setattr(security_utils, "assert_public_url", lambda u: None)
     monkeypatch.setattr(ssrf_guard, "assert_public_urls", lambda i: None)
@@ -117,3 +118,31 @@ def test_release_models_called_after_audio_transcription(main, monkeypatch, tmp_
     audio.write_bytes(b"x")
     main.transcribe_video(str(audio))
     assert calls == ["release"]
+
+
+def _cookie_use_per_attempt(main, fake_ydl, tmp_path, monkeypatch, **kw):
+    monkeypatch.setenv("YOUTUBE_COOKIES", "# Netscape HTTP Cookie File")
+    monkeypatch.setenv("BGUTIL_BASE_URL", "http://bgutil.invalid:3")
+
+    def fail(params):
+        raise RuntimeError("Sign in to confirm you're not a bot")
+    fake_ydl.fail_extract = staticmethod(fail)
+    with pytest.raises(RuntimeError):
+        main._download_youtube_video(YT, str(tmp_path), **kw)
+    return [bool(i.params.get("cookiefile")) for i in fake_ydl.instances]
+
+
+def test_cookies_first_then_anonymous_for_audio(main, fake_ydl, tmp_path, monkeypatch):
+    assert _cookie_use_per_attempt(main, fake_ydl, tmp_path, monkeypatch, audio_only=True) == [True, False]
+
+
+def test_cookies_first_then_anonymous_for_pieces(main, fake_ydl, tmp_path, monkeypatch):
+    assert _cookie_use_per_attempt(main, fake_ydl, tmp_path, monkeypatch,
+                                   ranges=[(0.0, 30.0)]) == [True, False]
+
+
+def test_source_without_audio_stream_stops_after_one_attempt(main, fake_ydl, tmp_path):
+    fake_ydl.info = {**fake_ydl.info, "formats": [{"format_id": "1", "vcodec": "avc1", "acodec": "none"}]}
+    with pytest.raises(main.NoAudioFormat):
+        main._download_youtube_video(YT, str(tmp_path), audio_only=True)
+    assert len(fake_ydl.instances) == 1

@@ -19,11 +19,17 @@ def _env_float(name, default):
         return float(default)
 
 
-def usable(shorts):
-    """The clips with a finite, positive length."""
+def usable(shorts, duration=None):
+    """The clips with a finite, positive length that start inside the source
+    (a clip starting at or past ``duration`` is dropped; one ending past it is
+    clamped to it)."""
     out = []
     for c in shorts:
         try:
+            if duration is not None and float(c["start"]) >= float(duration):
+                continue
+            if duration is not None and float(c["end"]) > float(duration):
+                c["end"] = float(duration)
             if float(c["end"]) > float(c["start"]) >= 0:
                 out.append(c)
         except (KeyError, TypeError, ValueError):
@@ -75,17 +81,23 @@ def total_seconds(merged):
     return sum(e - s for s, e in merged)
 
 
-def cap_total(shorts, duration, pad=None, gap=None, max_total=None):
+def cap_total(shorts, duration, pad=None, gap=None, max_total=None, min_keep=1):
     """Drop the lowest-scored clips until the pieces fit ``max_total`` seconds
-    (RANGE_MAX_TOTAL_SECONDS, default 1800). Survivors keep source order."""
+    (RANGE_MAX_TOTAL_SECONDS, default 1800), but never below ``min_keep``
+    clips (the clip-count floor): then it says the cap was exceeded.
+    Survivors keep source order."""
     max_total = _env_float("RANGE_MAX_TOTAL_SECONDS", 1800) if max_total is None else float(max_total)
     keep = list(shorts)
-    while len(keep) > 1 and total_seconds(
+    min_keep = max(1, int(min_keep))
+    while len(keep) > min_keep and total_seconds(
             merge_ranges(pad_ranges(keep, duration, pad), gap)) > max_total:
         keep = trim_to_best(keep, len(keep) - 1)
     if len(keep) < len(shorts):
         print(f"✂️ Range cap: keeping {len(keep)} of {len(shorts)} clips "
               f"(pieces would exceed {max_total:.0f}s).")
+    if total_seconds(merge_ranges(pad_ranges(keep, duration, pad), gap)) > max_total:
+        print(f"⚠️ Range cap exceeded: the {min_keep}-clip floor outranks "
+              f"the {max_total:.0f}s cap.")
     return keep
 
 
