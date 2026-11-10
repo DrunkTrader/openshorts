@@ -121,3 +121,14 @@ def test_retention_removes_every_piece(job, monkeypatch):
         os.utime(job / p["file"], (old, old))
     assert list(app._sweep_retained_sources(time.time())) == [JOB]
     assert not [f for f in os.listdir(job) if ".piece_" in f]
+
+
+def test_non_owner_is_refused_on_the_source_endpoint_with_a_range(job, monkeypatch):
+    monkeypatch.setattr(app, "BILLING_ENABLED", True)
+    app.jobs[JOB]["user_id"] = "someone-else"
+
+    async def nobody(request):
+        return None
+    monkeypatch.setattr(app, "_user_from_request", nobody)
+    r = _request("GET", f"/api/source/{JOB}?start=100&end=130")
+    assert r.status_code == 404 and r.content != b"piece"
