@@ -146,3 +146,17 @@ def record_pieces(output_dir, title, ranges, attempted):
             done.pop(str(n), None)
     with open(_sidecar(output_dir, title), "w") as f:
         json.dump(done, f)
+
+
+def pick_piece(pieces, start=None, end=None, tol=0.5):
+    """The metadata ``source_pieces`` entry holding ``[start, end]`` (the first
+    one when no range is asked for), or None when no single piece does."""
+    if not pieces:
+        return None
+    if start is None:
+        return pieces[0]
+    end = start if end is None else end
+    for p in pieces:
+        if p["start"] - tol <= start and end <= p["end"] + tol:
+            return p
+    return None

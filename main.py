@@ -2955,6 +2955,7 @@ if __name__ == '__main__':
                     min_keep=min(n_picked, clip_count_targets(n_picked)[0]))
                 source_pieces_used.extend(source_pieces)
                 clips_data['source_url'] = args.url
+                clips_data['source_duration'] = duration
 
             # Save metadata. Silent videos have no transcript → no subtitles,
             # which is correct (there's no speech to caption).

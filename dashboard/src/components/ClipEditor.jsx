@@ -129,6 +129,10 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
 
     const videoRef = useRef(null);
     const sourceRef = useRef(null);
+    // A job that kept only padded pieces of its source serves the piece that
+    // holds the clip: the monitor's time 0 is the piece's start in the source.
+    const offsetRef = useRef(0);
+    offsetRef.current = edl?.source?.offset || 0;
     const clipTrackRef = useRef(null);
     const sourceTrackRef = useRef(null);
     const dragRef = useRef(null);
@@ -157,7 +161,7 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
         if (!v || t === null) return;
         if (v.readyState === 0) return;          // retried from onLoadedMetadata
         if (!v.paused) v.pause();                // a moving picture cannot be aimed
-        try { v.currentTime = Math.max(0, t); } catch { /* seek refused, keep pending */ }
+        try { v.currentTime = Math.max(0, t - offsetRef.current); } catch { /* seek refused, keep pending */ }
         seekRef.current.pending = null;
     }, []);
 
@@ -753,7 +757,7 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
     const markHere = (which) => {
         const v = sourceRef.current;
         if (!v || !Number.isFinite(v.currentTime)) return;
-        (which === 'in' ? setMarkIn : setMarkOut)(round3(v.currentTime));
+        (which === 'in' ? setMarkIn : setMarkOut)(round3(v.currentTime + offsetRef.current));
     };
 
     const clearMarks = () => { setMarkIn(null); setMarkOut(null); };
@@ -1164,7 +1168,7 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                                 playsInline
                                 preload="metadata"
                                 onLoadedMetadata={applySeek}
-                                onTimeUpdate={(e) => setSourceTime(e.target.currentTime)}
+                                onTimeUpdate={(e) => setSourceTime(e.target.currentTime + offsetRef.current)}
                                 className="h-full w-auto max-w-full max-h-full bg-black rounded-card border border-rule"
                             />
                         </div>
