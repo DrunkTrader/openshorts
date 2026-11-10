@@ -78,6 +78,48 @@ def _headers() -> dict:
     return {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
 
 
+def _stream() -> bool:
+    """LLM_STREAM=1 streams the completion. Needed behind proxies with an idle
+    response timeout (a Cloudflare tunnel cuts at ~100 s with a 524) when the
+    model is slower than that to produce a whole answer."""
+    return (os.environ.get("LLM_STREAM") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _reasoning_effort() -> str:
+    """LLM_REASONING_EFFORT (e.g. "none") is passed through as the OpenAI
+    ``reasoning_effort`` field; "none" turns thinking off on Ollama."""
+    return (os.environ.get("LLM_REASONING_EFFORT") or "").strip()
+
+
+def _collect_stream(resp: httpx.Response) -> dict:
+    """Fold an OpenAI SSE stream into the non-streaming response shape. A
+    server that ignores ``stream`` and answers with plain JSON is accepted.
+    Token usage is only known if the server sends it in the last chunk; else
+    the cost report shows 0 tokens (no ``stream_options``: some servers reject it)."""
+    if "text/event-stream" not in (resp.headers.get("content-type") or ""):
+        resp.read()
+        return resp.json()
+    parts, usage = [], {}
+    for line in resp.iter_lines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if payload == "[DONE]":
+            break
+        try:
+            chunk = json.loads(payload)
+        except ValueError:
+            continue
+        if chunk.get("usage"):
+            usage = chunk["usage"]
+        for choice in chunk.get("choices") or []:
+            content = (choice.get("delta") or {}).get("content")
+            if isinstance(content, str):
+                parts.append(content)
+    return {"choices": [{"message": {"content": "".join(parts)}}], "usage": usage}
+
+
 def _client(**kwargs) -> httpx.Client:
     """Factory so tests can swap in ``httpx.MockTransport``."""
     return httpx.Client(timeout=_timeout(), **kwargs)
@@ -119,10 +161,20 @@ def generate_json(prompt: str, schema: Type[BaseModel], model: Optional[str] = N
     last_rejection: Optional[str] = None
     with _client() as client:
         for fmt in _response_formats(schema):
-            body = {"model": model, "messages": messages, "temperature": 0.2, "stream": False}
+            body = {"model": model, "messages": messages, "temperature": 0.2, "stream": _stream()}
             if fmt is not None:
                 body["response_format"] = fmt
-            resp = client.post(url, json=body, headers=_headers())
+            effort = _reasoning_effort()
+            if effort:
+                body["reasoning_effort"] = effort
+            if body["stream"]:
+                with client.stream("POST", url, json=body, headers=_headers()) as resp:
+                    if resp.status_code >= 400:
+                        resp.read()
+                    else:
+                        data = _collect_stream(resp)
+            else:
+                resp = client.post(url, json=body, headers=_headers())
             if fmt is not None and _is_format_rejection(resp):
                 # The server does not know this response_format flavour; the
                 # next loop iteration asks for a looser one.
@@ -131,7 +183,8 @@ def generate_json(prompt: str, schema: Type[BaseModel], model: Optional[str] = N
             if resp.status_code >= 400:
                 raise RuntimeError(
                     f"LLM server {resp.status_code} from {url}: {resp.text[:300]}")
-            data = resp.json()
+            if not body["stream"]:
+                data = resp.json()
             break
         else:
             raise RuntimeError(

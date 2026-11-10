@@ -149,3 +149,122 @@ def test_score_batch_shrinks_for_local_models(local, monkeypatch):
     monkeypatch.delenv("LLM_BASE_URL")
     monkeypatch.delenv("LLM_SCORE_BATCH")
     assert main.score_batch_size() == 8
+
+
+# --- streaming / reasoning effort -------------------------------------------
+
+_WINDOWS = {"windows": [{"id": "w0", "start": 0, "end": 90, "score": 88, "reason": "hook"}]}
+
+
+def _sse(*chunks, done=True, extra=()):
+    lines = list(extra) + [f"data: {json.dumps(c)}" for c in chunks]
+    if done:
+        lines.append("data: [DONE]")
+    return httpx.Response(200, headers={"content-type": "text/event-stream"},
+                          content=("\n\n".join(lines) + "\n\n").encode())
+
+
+def _deltas(text, n=3):
+    step = max(1, len(text) // n + 1)
+    return [{"choices": [{"delta": {"content": text[i:i + step]}}]}
+            for i in range(0, len(text), step)]
+
+
+def test_stream_collects_sse_deltas_into_one_payload(local, monkeypatch):
+    monkeypatch.setenv("LLM_STREAM", "1")
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return _sse(*_deltas(json.dumps(_WINDOWS)))
+
+    _serve(handler, monkeypatch)
+    parsed, _ = llm_backend.generate_json("p", gemini_worker.ScoreResponse)
+    assert seen["body"]["stream"] is True
+    assert parsed["windows"][0]["id"] == "w0" and parsed["windows"][0]["score"] == 88
+
+
+def test_stream_accepts_plain_json_from_a_server_that_ignores_stream(local, monkeypatch):
+    monkeypatch.setenv("LLM_STREAM", "1")
+    _serve(lambda r: _completion(_WINDOWS), monkeypatch)
+    parsed, cost = llm_backend.generate_json("p", gemini_worker.ScoreResponse)
+    assert parsed["windows"][0]["id"] == "w0"
+    assert cost["input_tokens"] == 120
+
+
+def test_stream_reports_usage_from_final_chunk(local, monkeypatch):
+    monkeypatch.setenv("LLM_STREAM", "1")
+    chunks = _deltas(json.dumps(_WINDOWS)) + [
+        {"choices": [], "usage": {"prompt_tokens": 7, "completion_tokens": 9}}]
+    _serve(lambda r: _sse(*chunks), monkeypatch)
+    _, cost = llm_backend.generate_json("p", gemini_worker.ScoreResponse)
+    assert (cost["input_tokens"], cost["output_tokens"]) == (7, 9)
+
+
+def test_stream_skips_malformed_and_comment_lines(local, monkeypatch):
+    monkeypatch.setenv("LLM_STREAM", "1")
+    chunks = _deltas(json.dumps(_WINDOWS))
+    resp = _sse(chunks[0], extra=[": keep-alive", "data: not-json"], done=False)
+    body = resp.content.decode() + "".join(
+        f"data: {json.dumps(c)}\n\n" for c in chunks[1:]) + "data: [DONE]\n\n"
+    # a chunk after [DONE] must be ignored
+    body += f"data: {json.dumps({'choices': [{'delta': {'content': 'junk'}}]})}\n\n"
+    _serve(lambda r: httpx.Response(200, headers={"content-type": "text/event-stream"},
+                                    content=body.encode()), monkeypatch)
+    parsed, _ = llm_backend.generate_json("p", gemini_worker.ScoreResponse)
+    assert parsed["windows"][0]["id"] == "w0"
+
+
+def test_stream_http_error_raises_with_body(local, monkeypatch):
+    monkeypatch.setenv("LLM_STREAM", "1")
+    _serve(lambda r: httpx.Response(500, text="model exploded"), monkeypatch)
+    with pytest.raises(RuntimeError, match="500.*model exploded"):
+        llm_backend.generate_json("p", gemini_worker.ScoreResponse)
+
+
+def test_stream_format_rejection_falls_back_to_next_format(local, monkeypatch):
+    monkeypatch.setenv("LLM_STREAM", "1")
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        if len(bodies) == 1:
+            return httpx.Response(400, text="response_format json_schema unsupported")
+        return _sse(*_deltas(json.dumps(_WINDOWS)))
+
+    _serve(handler, monkeypatch)
+    parsed, _ = llm_backend.generate_json("p", gemini_worker.ScoreResponse)
+    assert len(bodies) == 2
+    assert bodies[0]["response_format"] != bodies[1]["response_format"]
+    assert parsed["windows"][0]["id"] == "w0"
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("", False), ("0", False), ("no", False),
+    ("1", True), ("true", True), ("YES", True), ("on", True)])
+def test_stream_off_by_default_and_truthy_values(local, monkeypatch, value, expected):
+    monkeypatch.setenv("LLM_STREAM", value)
+    seen = {}
+
+    def handler(request):
+        seen["body"] = json.loads(request.content)
+        return _completion(_WINDOWS)
+
+    _serve(handler, monkeypatch)
+    llm_backend.generate_json("p", gemini_worker.ScoreResponse)
+    assert seen["body"]["stream"] is expected
+
+
+def test_reasoning_effort_sent_only_when_set(local, monkeypatch):
+    bodies = []
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        return _completion(_WINDOWS)
+
+    _serve(handler, monkeypatch)
+    llm_backend.generate_json("p", gemini_worker.ScoreResponse)
+    monkeypatch.setenv("LLM_REASONING_EFFORT", "none")
+    llm_backend.generate_json("p", gemini_worker.ScoreResponse)
+    assert "reasoning_effort" not in bodies[0]
+    assert bodies[1]["reasoning_effort"] == "none"
