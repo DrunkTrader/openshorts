@@ -21,7 +21,21 @@ The old fallback list (``tv_embed``, ``android``) is gone from yt-dlp: the
 first is "unsupported", the second is skipped whenever cookies are present.
 """
 
+import os
+import tempfile
+
 HD_CLIENTS = ["default", "mweb"]
+
+
+def cookies_path() -> str:
+    """Where YOUTUBE_COOKIES is written and read back: COOKIES_FILE, else the
+    image's /app when writable, else the temp dir (native Linux non-root, Windows)."""
+    explicit = os.environ.get("COOKIES_FILE")
+    if explicit:
+        return explicit
+    if os.path.isdir("/app") and os.access("/app", os.W_OK):
+        return "/app/cookies.txt"
+    return os.path.join(tempfile.gettempdir(), "openshorts_cookies.txt")
 
 
 class NotASingleVideo(ValueError):

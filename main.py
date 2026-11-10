@@ -908,7 +908,8 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     print("📥 Downloading video from YouTube...")
     step_start_time = time.time()
 
-    cookies_path = '/app/cookies.txt'
+    from yt_clients import cookies_path as _cookies_path
+    cookies_path = _cookies_path()
     cookies_env = os.environ.get("YOUTUBE_COOKIES")
     if cookies_env:
         print("🍪 Found YOUTUBE_COOKIES env var, creating cookies file inside container...")
