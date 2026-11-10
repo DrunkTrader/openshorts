@@ -1,4 +1,4 @@
-/* Hallmark · genre: atmospheric · theme: lumen (night foundry) · design-system: design.md · designed-as-app */
+/* Tokens live in tokens.css (light + dark). Instrument Serif display, Geist body. */
 /* Noto Serif (hook-overlay font, burned into videos — not UI) is self-hosted
    with the rest of the faces in public/fonts.css: no request to Google. */
 @import './tokens.css';
@@ -16,10 +16,17 @@
     @apply bg-paper text-ink2 antialiased;
     font-family: var(--font-body);
     font-variant-numeric: tabular-nums;
+    line-height: var(--leading-body);
+    transition: background-color var(--dur-short) var(--ease-out), color var(--dur-short) var(--ease-out);
     /* A single stray wide child (a log line, a long URL) used to make the whole
        app pan sideways on a phone. Panes that really are wide scroll on their own. */
     overflow-x: hidden;
   }
+
+  /* Editorial type: serif display for h1, tight tracking on every heading. */
+  h1 { font-family: var(--font-display); font-weight: 400; letter-spacing: var(--tracking-display); line-height: 1.08; }
+  h2, h3 { letter-spacing: -0.02em; line-height: 1.2; }
+  .tabular { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
 
   /* Touch: iOS zooms the page whenever a focused field renders below 16px, and
      it never zooms back out. Lift every text control to 16px on small screens —
@@ -58,16 +65,25 @@
       var(--color-paper-2);
     border: 1px solid var(--color-rule);
     border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
   }
 
   .card-hover {
     transition: transform var(--dur-short) var(--ease-out),
+                box-shadow var(--dur-short) var(--ease-out),
                 border-color var(--dur-short) var(--ease-out),
                 background-color var(--dur-short) var(--ease-out);
   }
   .card-hover:hover {
-    transform: translateY(-4px);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-pop);
     border-color: var(--color-rule-2);
+  }
+
+  .skeleton {
+    background: linear-gradient(100deg, var(--color-paper-3) 30%, var(--color-rule) 50%, var(--color-paper-3) 70%);
+    background-size: 200% 100%;
+    animation: skeleton 1.4s var(--ease-out) infinite;
   }
 
   /* mono UPPERCASE micro label — the only uppercase surface */
@@ -92,7 +108,7 @@
 
   .input-field {
     @apply w-full text-sm text-ink2;
-    background: var(--color-paper);
+    background: var(--color-paper-2);
     border: 1px solid var(--color-rule-2);
     border-radius: var(--radius-input);
     padding: 0.75rem 1rem;
@@ -100,40 +116,40 @@
     transition: border-color var(--dur-short) var(--ease-out);
   }
   .input-field::placeholder { color: var(--color-muted); opacity: 0.7; }
-  .input-field:focus { border-color: var(--color-accent); }
+  .input-field:focus { border-color: var(--color-accent); box-shadow: 0 0 0 3px oklch(var(--c-accent) / 0.15); }
 
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-2 px-6 py-3 text-sm font-medium lowercase;
-    background: var(--color-accent);
-    color: var(--color-accent-ink);
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 text-sm font-medium;
+    background: var(--color-ink);
+    color: var(--color-paper);
     border-radius: 999px;
     transition: filter var(--dur-short) var(--ease-out), transform var(--dur-short) var(--ease-out);
   }
-  .btn-primary:hover { filter: brightness(1.08); }
+  .btn-primary:hover { opacity: 0.88; }
   .btn-primary:active { transform: translateY(1px); }
   .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
 
   .btn-ghost {
-    @apply inline-flex items-center justify-center gap-2 px-6 py-3 text-sm font-medium lowercase text-ink;
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 text-sm font-medium text-ink;
     background: transparent;
     border: 1px solid var(--color-rule-2);
     border-radius: 999px;
     transition: border-color var(--dur-short) var(--ease-out), background-color var(--dur-short) var(--ease-out);
   }
-  .btn-ghost:hover { border-color: var(--color-accent); }
+  .btn-ghost:hover { border-color: var(--color-ink); background: var(--color-paper-3); }
   .btn-ghost:active { transform: translateY(1px); }
   .btn-ghost:disabled { opacity: 0.45; cursor: not-allowed; }
 
   .btn-quiet {
-    @apply inline-flex items-center justify-center gap-2 px-4 py-2 text-sm lowercase text-ink2;
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 text-sm text-ink2;
     background: var(--color-paper-3);
     border-radius: 999px;
     transition: filter var(--dur-short) var(--ease-out);
   }
-  .btn-quiet:hover { filter: brightness(1.15); }
+  .btn-quiet:hover { background: var(--color-rule-2); }
 
   .btn-danger {
-    @apply inline-flex items-center justify-center gap-2 px-4 py-2 text-sm lowercase;
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 text-sm;
     color: var(--color-danger);
     border: 1px solid color-mix(in oklab, var(--color-danger) 40%, transparent);
     border-radius: 999px;
@@ -160,7 +176,7 @@
      base or the border line shows straight through the pill. */
   .badge-float  {
     color: var(--color-accent);
-    background: color-mix(in oklab, var(--color-accent) 12%, var(--color-paper));
+    background: color-mix(in oklab, var(--color-accent) 12%, var(--color-paper-2));
   }
 
   /* narrow phones: tighter pill padding so CTA labels stay on one line */
@@ -251,6 +267,8 @@
     top: 100%;
   }
 }
+
+@keyframes skeleton { to { background-position: -200% 0; } }
 
 @keyframes filament-pulse {
   0%, 100% { opacity: 1; }
