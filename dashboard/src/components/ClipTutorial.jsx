@@ -11,12 +11,12 @@ const TOUR = [
   {
     target: '[data-tutorial="source-tabs"]',
     title: 'Upload or paste a link',
-    body: 'Drop an MP4, or switch to Video URL and paste YouTube, TikTok, Instagram…',
+    body: 'Drop an MP4 or paste a link from YouTube, TikTok, Instagram…',
   },
   {
     target: '[data-tutorial="drop-zone"]',
     title: 'Your video',
-    body: 'Click the box or paste the link here. Keep files under 500MB.',
+    body: 'Drop the file on the card, or paste the link here. Keep files under 500MB.',
   },
   {
     target: '[data-tutorial="output-format"]',
