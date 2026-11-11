@@ -143,3 +143,58 @@ def test_bound_drops_clip_outside_its_window():
 def test_bound_trims_long_clip_keeping_start():
     kept, notes = _bound([_c(0, 300)], items=[])
     assert (kept[0]["start"], kept[0]["end"]) == (0, 60) and "trimmed" in notes[0]
+
+
+def _run_detail(main, monkeypatch, detail_fn, score_of, floor=2):
+    calls = []
+
+    def fake_stage(client, model, prompt, schema):
+        if schema is main.gemini_worker.ScoreResponse:
+            ws = json.loads(prompt.split("WINDOWS_JSON:")[-1].split("Return only:")[0])
+            return {"windows": [{"id": w["id"], "start": 0, "end": 1, "score": score_of(w["id"]),
+                                 "reason": "r"} for w in ws]}, None
+        ws = json.loads(prompt.split("CANDIDATE_WINDOWS_JSON:")[-1].split("Return only:")[0])
+        calls.append(ws)
+        return {"shorts": detail_fn(ws, len(calls))}, None
+
+    monkeypatch.setattr(main, "_run_gemini_stage", fake_stage)
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setenv("CLIP_TARGET_MIN", str(floor))
+    monkeypatch.setenv("CLIP_TARGET_MAX", "4")
+    monkeypatch.setattr(main.genai, "Client", lambda api_key=None: object())
+    monkeypatch.setattr(main, "shortlist_target", lambda d: 2)
+    tr = {"language": "en", "segments": [
+        {"start": i * 15.0, "end": i * 15.0 + 15, "text": f"seg{i:02d} " + "y" * 100,
+         "words": [{"word": "w", "start": i * 15.0 + 1, "end": i * 15.0 + 2}]} for i in range(40)]}
+    return main.get_viral_clips(tr, 600.0), calls
+
+
+def _clip(a, b, wid):
+    return {"start": a, "end": b, "source_window_id": wid, "predicted_score": 70,
+            "video_title_for_youtube_short": "t", "viral_hook_text": "h"}
+
+
+def test_floor_holds_after_dedupe_of_clips_from_overlapping_contexts(main, monkeypatch):
+    def detail(ws, n):
+        if n == 1:  # windows 1 and 3 both reach window 2 and both pick the same moment
+            assert [w["id"] for w in ws] == ["window_001", "window_003"]
+            return [_clip(100, 130, w["id"]) for w in ws]
+        return [_clip(w["search_start"] + 1, w["search_start"] + 31, w["id"]) for w in ws]
+
+    out, calls = _run_detail(main, monkeypatch, detail,
+                             lambda i: 90 if i in ("window_001", "window_003") else 10)
+    assert len(calls) == 2, "dedupe dropped a clip and the floor never retried"
+    assert len(out["shorts"]) == 2
+
+
+def test_merged_window_counts_as_used_for_any_member_id(main, monkeypatch):
+    def detail(ws, n):
+        if n == 1:
+            assert ws[0].get("ids") and len(ws) == 1
+            return [_clip(ws[0]["start"] + 5, ws[0]["start"] + 35, ws[0]["ids"][-1]),
+                    _clip(ws[0]["start"] + 60, ws[0]["start"] + 90, ws[0]["ids"][-1])]
+        raise AssertionError("the merged window was re-asked although it answered")
+
+    out, calls = _run_detail(main, monkeypatch, detail,
+                             lambda i: 90 if i in ("window_001", "window_002") else 10, floor=3)
+    assert len(calls) == 1 and len(out["shorts"]) == 2

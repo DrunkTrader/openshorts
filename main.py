@@ -32,7 +32,7 @@ import llm_backend
 import twitch_signals
 import heatmap_signals
 from clip_selection import (build_transcript_windows, build_window_payload,
-                            detail_batches, merge_adjacent, neighbour_context, clip_count_targets,
+                            bound_clips, detail_batches, merge_adjacent, neighbour_context, clip_count_targets,
                             clip_duration_bounds, dedupe_overlapping,
                             score_batches, shortlist_target,
                             snap_clip_to_words, trim_to_best,
@@ -2334,31 +2334,68 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None, replay
         char_budget = int(os.environ.get("DETAIL_BATCH_CHARS", "9000"))
 
         def _detail(items, lo, hi):
-            return [s for b in (detail_batches(items, char_budget)
-                                if llm_backend.active() and char_budget > 0 else [items])
-                    for s in _run_stage_split(client, model_name, b, _detail_prompt_for(lo, hi),
-                                              gemini_worker.DetailResponse, "shorts", costs, "detail")]
+            # DETAIL_BATCH_CHARS is calibrated on Latin text (~3.5 chars/token);
+            # CJK runs about twice the tokens per char, so lower it there.
+            batches = (detail_batches(items, char_budget)
+                       if llm_backend.active() and char_budget > 0 else [items])
+            out = []
+            for b in batches:
+                # Each batch is asked for its share of the band; the global
+                # floor is enforced below, in code.
+                share = len(b) / max(1, len(items))
+                blo = lo if len(batches) == 1 else max(1, round(lo * share))
+                bhi = hi if len(batches) == 1 else max(blo, math.ceil(hi * share))
+                out.extend(_run_stage_split(client, model_name, b, _detail_prompt_for(blo, bhi),
+                                            gemini_worker.DetailResponse, "shorts", costs, "detail"))
+            return out
 
-        shorts = _detail(detail_items, min_clips, max_clips)
+        def _finish(raw):
+            """Bound, snap and dedupe the model's clips. The floor is judged on
+            what survives this, not on what the model returned."""
+            kept, notes = bound_clips(raw, detail_items, video_duration, min_secs, max_secs)
+            for note in notes:
+                print(f"   Bounds: {note}")
+            snapped = []
+            for c in kept:
+                s = dict(c)
+                # Keep the model's raw proposal: it is how boundary accuracy is
+                # measured (distance to the nearest word before the snap; p90 was
+                # 0.4-0.5 s on 8 talks, 21-sep-2026, so the snap reaches it).
+                s["proposed"] = [s.get("start", 0), s.get("end", 0)]
+                s["start"], s["end"] = snap_clip_to_words(
+                    s["start"], s["end"], words, video_duration,
+                    min_duration=min_secs, max_duration=max_secs)
+                snapped.append(s)
+            deduped = dedupe_overlapping(snapped)
+            if len(deduped) < len(snapped):
+                print(f"   Dropped {len(snapped) - len(deduped)} clip(s) overlapping a "
+                      f"better-scored one.")
+            return deduped
+
+        raw = _detail(detail_items, min_clips, max_clips)
+        shorts = _finish(raw)
 
         # The floor lived only in the prompt, and a prompt is not a contract:
         # the model regularly returned half of it and the job shipped that.
-        # The windows it passed over are the cheap second chance — they are
+        # The windows that kept no clip are the cheap second chance — they are
         # already the best-scoring ones in the video — so they get one more
         # call for the missing clips. It may still come back empty, which is
         # the honest answer for material that does not hold more.
         if len(shorts) < min_clips:
-            used = {str(s.get("source_window_id") or "") for s in shorts}
+            owner = {i: w["id"] for w in detail_items for i in (w.get("ids") or [w["id"]])}
+            used = {owner.get(str(s.get("source_window_id") or "")) for s in shorts}
             spare = [w for w in detail_items if w["id"] not in used]
             if spare:
                 missing = min_clips - len(shorts)
-                print(f"   Detail returned {len(shorts)} clip(s) of {min_clips}; "
+                print(f"   {len(shorts)} clip(s) survive of {min_clips}; "
                       f"asking the {len(spare)} unused window(s) for {missing} more.")
                 extra = _detail(spare, missing, max(missing, len(spare)))
                 if extra:
-                    shorts = sorted(shorts + extra,
+                    shorts = sorted(_finish(raw + extra),
                                     key=lambda s: float(s.get("start") or 0))
-                    print(f"   Recovered {len(extra)} clip(s) from them.")
+                    print(f"   Recovered; {len(shorts)} clip(s) now.")
+            if len(shorts) < min_clips:
+                print(f"   Floor of {min_clips} not reached ({len(shorts)}): the material may not hold more.")
 
         if len(shorts) > max_clips:
             # By score, never by position: the results arrive in transcript
@@ -2368,20 +2405,6 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None, replay
             shorts = trim_to_best(shorts, max_clips)
             print(f"   Kept the {max_clips} best-scoring clip(s) of "
                   f"{max_clips + dropped}.")
-        # Snap each proposed clip onto real word boundaries (+ a bit of silence).
-        for s in shorts:
-            # Keep the model's raw proposal: it is how boundary accuracy is
-            # measured (distance to the nearest word before the snap; p90 was
-            # 0.4-0.5 s on 8 talks, 21-sep-2026, so the snap reaches it).
-            s["proposed"] = [s.get("start", 0), s.get("end", 0)]
-            ns, ne = snap_clip_to_words(s.get("start", 0), s.get("end", 0), words, video_duration,
-                                        min_duration=min_secs, max_duration=max_secs)
-            s["start"], s["end"] = ns, ne
-        deduped = dedupe_overlapping(shorts)
-        if len(deduped) < len(shorts):
-            print(f"   Dropped {len(shorts) - len(deduped)} clip(s) overlapping a "
-                  f"better-scored one.")
-            shorts = deduped
 
         # Aggregate cost across both passes.
         cost_analysis = None
