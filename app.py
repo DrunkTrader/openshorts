@@ -30,6 +30,8 @@ from starlette.background import BackgroundTask
 from pydantic import BaseModel
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
 import recut
+import slot_library
+import slot_split
 import layout_ranges
 import watermarked
 import media_auth
@@ -2580,6 +2582,9 @@ def _rm_under(base_dir: str, relative: str):
             pass
 
 
+_OWNER_DIR_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+
+
 def _purge_local_jobs_for_user(user_id) -> int:
     """Delete this user's working files and in-memory records from local disk.
 
@@ -2639,6 +2644,14 @@ def _purge_local_jobs_for_user(user_id) -> int:
             _rm_under(OUTPUT_DIR, os.path.basename(out))
         saas_jobs.pop(jid, None)
         removed += 1
+
+    # Slot-split library: uploaded clips and their thumbnails.
+    if _OWNER_DIR_RE.match(uid):
+        for base, rel in ((UPLOAD_DIR, f"slot_library/{uid}"),
+                          (THUMBNAILS_DIR, f"slot_{uid}")):
+            if os.path.isdir(os.path.join(base, rel)):
+                _rm_under(base, rel)
+                removed += 1
 
     for sid, sess in list(thumbnail_sessions.items()):
         if not _owned_by(sess, uid):
@@ -5545,6 +5558,207 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
         if reservation_id:
             await _metering.release_reservation(reservation_id)
         print(f"Reframe Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Slot split: uploaded clips as a half of the stack (item 10) ---------------
+# Not exposed to MCP/agents: the dashboard's "Split with clip" panel only.
+SLOT_UPLOAD_MAX_MB = int(os.environ.get("SLOT_UPLOAD_MAX_MB", "500"))
+SLOT_UPLOAD_MAX_SECONDS = float(os.environ.get("SLOT_UPLOAD_MAX_SECONDS", "600"))
+SLOT_LIBRARY_MAX_ITEMS = int(os.environ.get("SLOT_LIBRARY_MAX_ITEMS", "30"))
+_slot_library_lock = asyncio.Lock()
+
+
+async def _slot_library_dirs(request):
+    """(video_dir, thumb_dir, thumb_url_prefix) of the caller's library.
+    Videos sit under uploads/ (never served); thumbnails under the authorised
+    /thumbnails root with an ``.owner`` marker, so _authorize_media applies."""
+    await require_managed_entitlement(request)
+    owner = await _owner_id(request)
+    if BILLING_ENABLED and owner is None:
+        raise HTTPException(status_code=401, detail="Sign in to use the clip library")
+    key = slot_library.owner_key(owner)
+    thumb_dir = os.path.join(THUMBNAILS_DIR, f"slot_{key}")
+    if owner is not None:
+        _write_owner_marker(thumb_dir, owner)
+    return (os.path.join(UPLOAD_DIR, "slot_library", key), thumb_dir,
+            f"/thumbnails/slot_{key}")
+
+
+def _slot_item_view(item, thumb_prefix):
+    return {"id": item["id"], "name": item.get("name"),
+            "duration": item.get("duration"), "width": item.get("width"),
+            "height": item.get("height"), "has_audio": item.get("has_audio"),
+            "thumb": f"{thumb_prefix}/{item['thumb']}" if item.get("thumb") else None}
+
+
+@app.post("/api/slot-uploads")
+async def slot_upload(request: Request, file: UploadFile = File(...)):
+    video_dir, thumb_dir, prefix = await _slot_library_dirs(request)
+    name = os.path.basename((file.filename or "").replace("\\", "/")) or "upload"
+    ext = os.path.splitext(name)[1].lower()
+    if ext not in slot_library.ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=415, detail="Upload an MP4, MOV, WebM or MKV video.")
+    os.makedirs(video_dir, exist_ok=True)
+    tmp = os.path.join(video_dir, f".tmp_{uuid.uuid4().hex}")
+    limit = SLOT_UPLOAD_MAX_MB * 1024 * 1024
+    size = 0
+    try:
+        with open(tmp, "wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > limit:
+                    raise HTTPException(status_code=413, detail=f"File too large. Max size {SLOT_UPLOAD_MAX_MB}MB")
+                out.write(chunk)
+        # Trust boundary: the extension and the client MIME prove nothing.
+        if not slot_library.sniff_container(tmp):
+            raise HTTPException(status_code=415, detail="This file is not a video.")
+        loop = asyncio.get_event_loop()
+        try:
+            w, h, duration, has_audio = await loop.run_in_executor(None, slot_split.probe_video, tmp)
+        except slot_split.SlotError as e:
+            raise HTTPException(status_code=415, detail=str(e))
+        if not 0 < duration <= SLOT_UPLOAD_MAX_SECONDS:
+            raise HTTPException(status_code=413, detail=f"Clips must be at most {SLOT_UPLOAD_MAX_SECONDS:.0f}s long.")
+        async with _slot_library_lock:
+            if len(slot_library.list_items(video_dir)) >= SLOT_LIBRARY_MAX_ITEMS:
+                raise HTTPException(status_code=409, detail=f"The library holds at most {SLOT_LIBRARY_MAX_ITEMS} clips. Delete one first.")
+            item = await loop.run_in_executor(
+                None, slot_library.add, video_dir, thumb_dir, tmp, ext, name[:120],
+                {"width": w, "height": h, "duration": round(duration, 2), "has_audio": has_audio})
+        return _slot_item_view(item, prefix)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+@app.get("/api/slot-uploads")
+async def slot_uploads_list(request: Request):
+    video_dir, _thumb_dir, prefix = await _slot_library_dirs(request)
+    return {"items": [_slot_item_view(i, prefix) for i in slot_library.list_items(video_dir)]}
+
+
+@app.delete("/api/slot-uploads/{upload_id}")
+async def slot_upload_delete(upload_id: str, request: Request):
+    video_dir, thumb_dir, _prefix = await _slot_library_dirs(request)
+    if not slot_split.UPLOAD_ID_RE.match(upload_id):
+        raise HTTPException(status_code=404, detail="Not found")
+    async with _slot_library_lock:
+        if not slot_library.delete(video_dir, thumb_dir, upload_id):
+            raise HTTPException(status_code=404, detail="Not found")
+    return {"success": True}
+
+
+class SlotSplitRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    slots: Dict[str, Any]
+    reapply_captions: bool = True
+
+
+@app.post("/api/clip/split")
+async def split_clip(req: SlotSplitRequest, request: Request):
+    """Re-render a clip as a top/bottom stack whose halves are the clip itself
+    or an uploaded video. Separate from /api/clip/reframe (per-scene framing)
+    and /api/clip/rerender (the cut); same guards and the same per-job lock."""
+    await require_managed_entitlement(request)
+    await _ensure_job_files(req.job_id, request)
+    if req.job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = jobs[req.job_id]
+    await _assert_job_owner(request, job)
+    try:
+        spec = slot_split.parse_slots(req.slots)
+    except slot_split.SlotError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    video_dir, _t, _p = await _slot_library_dirs(request)
+    uploads = {}
+    for upload_id in slot_split.upload_ids(spec):
+        item = slot_library.get(video_dir, upload_id)
+        if not item or not os.path.exists(item["path"]):
+            raise HTTPException(status_code=404, detail="Upload not found in your library")
+        uploads[upload_id] = item
+    if spec["audio"] in ("upload", "mix") and not all(u.get("has_audio") for u in uploads.values()):
+        raise HTTPException(status_code=400, detail="The chosen upload has no audio track.")
+
+    lock = _rerender_locks.setdefault(req.job_id, asyncio.Lock())
+    async with lock:
+        return await _split_locked(req, request, job, spec, uploads)
+
+
+async def _split_locked(req, request, job, spec, uploads):
+    output_dir = os.path.join(OUTPUT_DIR, req.job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+    with open(json_files[0], 'r') as f:
+        data = json.load(f)
+    clips = data.get('shorts', [])
+    if req.clip_index < 0 or req.clip_index >= len(clips):
+        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = clips[req.clip_index]
+    if data.get('output_format') in ('horizontal', 'square'):
+        raise HTTPException(status_code=400,
+                            detail="Slot split needs a vertical (9:16) clip.")
+
+    segments, canonical_range = _clip_recipe_parts(clip)
+    source_path, source_offset = _locate_source_for_range(req.job_id, *_segments_span(segments))
+    if not source_path:
+        raise HTTPException(
+            status_code=409,
+            detail="The source video is no longer on the server, so this clip can no longer be split.")
+
+    reservation_id = await reserve_managed_action(
+        request, _cloud_config.EDITOR_ACTION_MINUTES if BILLING_ENABLED else 0,
+        req.job_id, "split")
+    v_transcript = (recut.virtual_transcript(data.get('transcript') or {}, segments)
+                    if req.reapply_captions else None)
+    base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+    clean_name = f"{base_name}_clip_{req.clip_index + 1}.mp4"
+    out_size = (1080, 1920)
+    try:
+        w, h, _d, _a = slot_split.probe_video(os.path.join(output_dir, clean_name))
+        out_size = (w - w % 2, h - h % 2)
+    except Exception:
+        pass  # canonical gone: the delivery default
+
+    def run():
+        return slot_split.perform_split(
+            source_path=source_path,
+            segments=recut.rebase_segments(segments, source_offset),
+            spec=spec, uploads=uploads, output_dir=output_dir,
+            clean_name=clean_name, out_size=out_size,
+            captions_transcript=v_transcript, captioner=_recut_captioner(clip))
+
+    try:
+        loop = asyncio.get_event_loop()
+        served_name, _clean = await loop.run_in_executor(None, run)
+        served_name = await _deliver(request, req.job_id, served_name)
+        new_video_url = f"/videos/{req.job_id}/{served_name}"
+        new_recipe = {"v": 1, "segments": segments,
+                      "canonical_range": canonical_range, "split_slots": spec}
+        updates = {
+            'video_url': new_video_url,
+            'recipe': new_recipe,
+            'layout_ranges': layout_ranges.read(os.path.join(output_dir, _clean)),
+        }
+        clip.update(updates)
+        data['shorts'] = clips
+        write_json_atomic(json_files[0], data, indent=2)
+        mem_clips = (job.get('result') or {}).get('clips') or []
+        if req.clip_index < len(mem_clips):
+            mem_clips[req.clip_index].update(updates)
+        _archive_clip_edit_bg(req.job_id, req.clip_index, served_name)
+        if reservation_id:
+            await _metering.commit_reservation(reservation_id)
+        return {"success": True, "new_video_url": new_video_url,
+                "recipe": new_recipe,
+                "start": min(s['start'] for s in segments),
+                "end": max(s['end'] for s in segments)}
+    except Exception as e:
+        if reservation_id:
+            await _metering.release_reservation(reservation_id)
+        print(f"Slot split error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

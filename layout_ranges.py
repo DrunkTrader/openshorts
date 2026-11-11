@@ -42,6 +42,9 @@ def write(video_path, ranges):
         band = _band(r[3] if len(r) > 3 else None)
         if band:
             entry["content"] = list(band)
+        seam = _seam(r[4] if len(r) > 4 else None)
+        if seam:
+            entry["seam"] = seam
         payload.append(entry)
     try:
         with open(sidecar_path(video_path), "w") as f:
@@ -73,6 +76,16 @@ def _band(value):
     return None
 
 
+def _seam(value):
+    """A seam height (fraction of the frame) other than the middle, or None.
+    Only a slot split with a 60/40 ratio has one; everything else is 0.5."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    return round(v, 4) if 0.3 <= v <= 0.7 and abs(v - 0.5) > 1e-6 else None
+
+
 def normalise(ranges):
     """Accept the sidecar/metadata shape or bare tuples; drop anything odd
     (an old metadata file, a hand-edited value) instead of raising. A
@@ -83,9 +96,11 @@ def normalise(ranges):
             if isinstance(r, dict):
                 s, e, layout = r["start"], r["end"], r.get("layout", "")
                 band = r.get("content")
+                seam = r.get("seam")
             else:
                 s, e, layout = r[:3]
                 band = r[3] if len(r) > 3 else None
+                seam = r[4] if len(r) > 4 else None
             s, e = float(s), float(e)
         except (KeyError, TypeError, ValueError):
             continue
@@ -94,17 +109,22 @@ def normalise(ranges):
             band = _band(band)
             if band:
                 entry["content"] = list(band)
+            seam = _seam(seam)
+            if seam:
+                entry["seam"] = seam
             out.append(entry)
     return out
 
 
 def split_ranges(ranges):
-    """(start, end) pairs of the stretches where captions belong on the seam."""
-    return [(r["start"], r["end"]) for r in normalise(ranges) if r["layout"] == "split"]
+    """(start, end) pairs of the stretches where captions belong on the seam;
+    (start, end, seam) when the seam is not at mid-frame (60/40 slot split)."""
+    return [(r["start"], r["end"]) + ((r["seam"],) if "seam" in r else ())
+            for r in normalise(ranges) if r["layout"] == "split"]
 
 
 def in_split(t, splits):
-    return any(s <= t < e for s, e in splits or [])
+    return any(s <= t < e for s, e, *_ in splits or [])
 
 
 def remap(ranges, segments):
@@ -131,6 +151,8 @@ def remap(ranges, segments):
                          "layout": r["layout"]}
                 if "content" in r:
                     moved["content"] = r["content"]
+                if "seam" in r:
+                    moved["seam"] = r["seam"]
                 out.append(moved)
         offset += seg_e - seg_s
     return out
