@@ -84,7 +84,7 @@ def _detail_clip(start, wid):
             "video_title_for_youtube_short": "t", "viral_hook_text": "h", "why": ""}
 
 
-def _drive(main, monkeypatch, curve, detail=lambda ids: [], silent=True):
+def _drive(main, monkeypatch, curve, detail=lambda ids: [], silent=True, tr=None, duration=900.0):
     calls = []
 
     def fake_stage(client, model, prompt, schema):
@@ -109,7 +109,7 @@ def _drive(main, monkeypatch, curve, detail=lambda ids: [], silent=True):
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     monkeypatch.setattr(main.genai, "Client", lambda api_key=None: object())
     monkeypatch.setattr(main.silent_signals, "audio_energy_curve", lambda *a, **k: curve)
-    out = main.get_viral_clips(_mixed(), 900.0, silent={"audio": "a.m4a", "title": "Race", "chapters": []}
+    out = main.get_viral_clips(tr or _mixed(), duration, silent={"audio": "a.m4a", "title": "Race", "chapters": []}
                                if silent else None)
     return (out or {}).get("shorts", []), calls
 
@@ -163,3 +163,28 @@ def test_local_llm_gets_only_a_text_prompt(main, monkeypatch):
     main._run_gemini_stage(None, "m", "a text prompt", main.gemini_worker.SilentCopyResponse)
     args, kwargs = seen[0]
     assert isinstance(args[0], str) and set(kwargs) <= {"model"} and len(args) == 2
+
+
+def test_get_viral_clips_holds_the_models_clips_to_their_bounds(main, monkeypatch):
+    # B-1: the call to bound_clips itself, not only the helper
+    def detail(ids):
+        w = ids[0]
+        return [_detail_clip(100, w) | {"end": 90.0},       # end before start
+                _detail_clip(-20, w) | {"end": 30.0},       # before the video
+                _detail_clip(850, w),                       # far outside its window
+                _detail_clip(10, w)]
+    clips, _ = _drive(main, monkeypatch, [0.0] * 900, detail=detail, silent=False)
+    assert clips and all(0 <= c["start"] < c["end"] <= 900 for c in clips)
+    assert not any(c["start"] == 100 and c["end"] == 90 for c in clips)
+    assert max(c["end"] for c in clips) <= 150, "a clip far outside its window survived"
+
+
+def test_undersized_nonspeech_group_below_the_floor_returns_what_exists(main, monkeypatch, capsys):
+    # one 60 s silent stretch, nothing from the detail pass, floor 4: the one silent
+    # clip is returned and the shortfall is logged, never padded
+    monkeypatch.setenv("CLIP_TARGET_MIN", "4")
+    segs = [_seg(t, t + 10) for t in list(range(0, 300, 10)) + list(range(360, 660, 10))]
+    clips, _ = _drive(main, monkeypatch, _curve([310]), tr={"language": "en", "segments": segs}, duration=660.0)
+    silent_clips = [c for c in clips if c.get("kind") == "nonspeech"]
+    assert len(silent_clips) == 1 and len(clips) == 1
+    assert "Floor of 4 not reached" in capsys.readouterr().out
