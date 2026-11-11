@@ -242,7 +242,7 @@ export const COMPETITORS = {
       'Count minutes, not clips. Klap meters clips generated; OpenShorts Cloud meters minutes of source, so add up the length of what you clip in a month.',
       'Time it for the end of your yearly term, since Klap publishes yearly prices and monthly billing costs about twice as much.',
       'Try the same video on both: Klap gives one free video, OpenShorts clips your first video free up to 60 minutes and then 20 minutes a month.',
-      'For gameplay or music with little speech, OpenShorts clips the silent stretches from audio peaks and replay heat, and switches to a vision pass only when there is no such signal, instead of failing on an empty transcript.',
+      'For gameplay or music with little speech, OpenShorts clips stretches of 30 seconds or more at 5 words a minute or fewer from their audio peaks (and replay heat on YouTube links), and uses a vision pass only for footage with no audio track or no signal, instead of failing on an empty transcript.',
       'Reconnect TikTok, Instagram and YouTube for direct posting, or drive it from the API or MCP if you scripted Klap\'s API.',
     ],
     bestFor:

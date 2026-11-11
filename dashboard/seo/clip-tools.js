@@ -822,7 +822,7 @@ const PLAN_MIN = (name) => PRICE_MODELS.openshorts.plans.find((p) => p.name === 
 
 const twitchSteps = [
   ['Paste the VOD link', 'Open the past broadcast on Twitch and copy its address (twitch.tv/videos/...), or the link of a Twitch clip of 45 seconds or more. A channel page is the live channel, not a recording, so the box asks for the VOD instead.'],
-  ['The AI finds the moments in the stream', 'The VOD is transcribed with a timestamp on every word and scanned for scene cuts, and Gemini ranks every stretch of the talk for how well it would play to someone who was not watching live. The silent stretches are clipped from their loudest or most replayed moments, and a vision pass takes over only when there is no such signal.'],
+  ['The AI finds the moments in the stream', 'The VOD is transcribed with a timestamp on every word and scanned for scene cuts, and Gemini ranks every stretch of the talk for how well it would play to someone who was not watching live. Any stretch of 30 seconds or more at 5 words a minute or fewer is clipped from its loudest moment by audio energy (and "most replayed" heat for YouTube links); a vision pass takes over only for footage with no audio track or no signal at all.'],
   ['Get vertical clips with your facecam', 'Each clip is reframed to 9:16: gameplay with a webcam box becomes gameplay on top and your enlarged facecam below, just-chatting segments follow your face. Captions and a hook are burned in; post to TikTok, YouTube Shorts and Instagram or download.'],
 ]
 
@@ -831,7 +831,7 @@ const twitchFaq = [
   { q: 'Does it work with a whole Twitch VOD?', a: 'Yes. Paste the twitch.tv/videos/ link of the past broadcast. Moment scoring reads the transcript rather than every frame, so a long VOD is analysed the same way as a short one. One job returns the best 6 to 12 moments of whatever it is given, so for a long stream it usually pays to clip it in parts.' },
   { q: 'Can it clip my stream while I am live?', a: 'No. It works from recordings: paste the VOD once the broadcast has ended, before Twitch removes the past broadcast.' },
   { q: 'Will my facecam stay in the clip?', a: 'Yes, with the vertical layout on auto. A webcam box composited into a corner is detected by its geometry (small, off centre, still) and the clip renders with the gameplay full width on top and the facecam cropped out and enlarged below.' },
-  { q: 'What about gameplay with no commentary?', a: 'When the transcript comes back with under 8 words, or under 5 words a minute, OpenShorts clips the silent stretches from their loudest or most replayed moments, and only with no such signal switches to a vision pass where Gemini watches the footage and picks the moments. Those clips have no captions. A long silent VOD is watched in stretches of up to 40 minutes and the best picks of all of them are kept, up to a little over five hours per job.' },
+  { q: 'What about gameplay with no commentary?', a: 'With an audio track but little speech, any stretch of 30 seconds or more at 5 words a minute or fewer becomes non-speech windows, ranked by audio energy (plus "most replayed" heat for YouTube links only) and cut around the loudest moment. With no audio track, or under 8 words in total (or 5 words a minute) and no signal to rank, it switches to a vision pass where Gemini watches the footage (a Gemini key is needed) and picks 3 to 15 moments. Clips from a stretch where nobody speaks have no captions. A long silent VOD is watched in stretches of up to 40 minutes and the best picks of all of them are kept, up to a little over five hours per job.' },
   { q: 'Can I turn Twitch clips into TikToks?', a: 'A Twitch clip of 45 seconds or more can be pasted as a source and comes back reframed to 9:16 with captions. Shorter clips are under the minimum; for those a static crop in the free video to 9:16 converter is the quicker route.' },
   { q: 'How many clips do I get from a stream?', a: 'Each job returns up to about a dozen: for any source longer than 12 minutes the AI is asked for 6 to 12. A four-hour stream clipped in four one-hour parts gives four times as many candidates as the same stream clipped in one job.' },
   { q: 'Does it post to TikTok and YouTube Shorts?', a: 'Yes, from the dashboard: YouTube Shorts and Instagram Reels are published directly, and TikTok receives the clip as a draft in your TikTok inbox to finish in the app.' },
@@ -933,9 +933,12 @@ clips</a>.</p>
 <h2>Silent gameplay and music-only streams</h2>
 <p>The default picker reads what you say, which is exactly right for
 commentary. A grind with the mic muted, or a stream that is mostly music, has
-nothing to read, so OpenShorts does not try. When the transcript comes back
-under 8 words in total, or under 5 words per minute, the video itself is sent to
-Gemini, which watches it and returns moments in the same 15 to 60 second band.
+nothing to read, so OpenShorts does not try. Any stretch of 30 seconds or more
+at 5 words per minute or fewer is ranked by audio energy (plus "most replayed"
+heat for YouTube links only) and cut around its loudest moment, in the same 15 to
+60 second band. A video with no audio track, or under 8 words in total (or under
+5 words per minute) and nothing to rank, has the video itself sent to Gemini
+(a Gemini key is needed), which watches it and returns moments.
 Layouts and facecam detection work the same; the clips come out without
 captions, because there is no speech to caption.</p>
 <p>That vision pass sends Gemini the footage itself, which it counts at
