@@ -56,6 +56,15 @@ The test suite runs on `windows-latest` in CI.
 
 Set `MAX_CONCURRENT_JOBS=1` and `WHISPER_MODEL=small` or `base`.
 
+## Voice activity detection
+
+Whisper runs with faster-whisper's bundled silero VAD (`WHISPER_VAD=0` turns it
+off, `WHISPER_VAD_MIN_SILENCE_MS` sets its silence gap). It needs `onnxruntime`,
+a faster-whisper dependency: checked on Linux aarch64 (faster-whisper 1.2.1,
+onnxruntime 1.31). On Windows and Windows-on-ARM the wheel is installed by pip
+the same way; if no wheel exists for your interpreter, set `WHISPER_VAD=0`
+(music and noise may then come back as stray words).
+
 ## Smoke test
 
 `uvicorn app:app --port 8000`, then `GET http://127.0.0.1:8000/docs` must
