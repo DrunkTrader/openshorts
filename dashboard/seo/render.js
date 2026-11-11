@@ -84,7 +84,8 @@ p{margin:0 0 1.1rem}
 ul,ol{margin:0 0 1.1rem;padding-left:1.25rem}
 li{margin-bottom:.45rem}
 .tbl{margin:1.25rem 0 1.5rem;overflow-x:auto}
-.tbl:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
+pre{overflow-x:auto;max-width:100%}
+.tbl:focus-visible,pre:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
 table{width:100%;border-collapse:collapse;font-size:.9rem;white-space:nowrap}
 @media(min-width:52rem){table{white-space:normal}}
 th,td{text-align:left;padding:.7rem .9rem;border-bottom:1px solid var(--rule);vertical-align:top}
@@ -628,6 +629,8 @@ const relatedBlock = (related, title) =>
 // A table wider than the screen scrolls inside a focusable, named region so a
 // keyboard user can scroll it. Done once here, not in each page's markup.
 function scrollableTables(html) {
+  // Code blocks scroll sideways too: focusable so a keyboard can reach the rest.
+  html = html.replace(/<pre>/g, '<pre tabindex="0" role="region" aria-label="Code example">')
   return html.replace(/<table\b[^>]*>[\s\S]*?<\/table>/g, (tbl, at) => {
     const cap = tbl.match(/<caption[^>]*>([\s\S]*?)<\/caption>/)
     const heads = [...html.slice(0, at).matchAll(/<h[23][^>]*>([\s\S]*?)<\/h[23]>/g)]
