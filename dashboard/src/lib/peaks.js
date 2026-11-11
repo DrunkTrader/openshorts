@@ -43,12 +43,15 @@ async function compute(url, bars, signal) {
 export function loadPeaks(url, bars = 96, signal) {
   if (!url) return Promise.resolve(null);
   const key = `${url}|${bars}`;
+  // A run started under a signal that has since been aborted (StrictMode's
+  // mount/unmount/mount, a closed card) resolves to null: start over instead
+  // of handing that null to the next caller.
+  if (cache.get(key)?.signal?.aborted) cache.delete(key);
   if (!cache.has(key)) {
     const p = chain.then(() => compute(url, bars, signal)).catch(() => null);
     chain = p.then(() => undefined);
-    // An aborted run must not poison the cache with its null.
-    cache.set(key, p);
-    p.then((v) => { if (v === null && signal?.aborted) cache.delete(key); });
+    cache.set(key, { p, signal });
+    p.then((v) => { if (v === null && signal?.aborted && cache.get(key)?.p === p) cache.delete(key); });
   }
-  return cache.get(key);
+  return cache.get(key).p;
 }
