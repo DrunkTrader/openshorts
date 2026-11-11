@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import { trapTab } from '../../lib/trapTab';
 
 /**
  * The single modal shell for the app (design.md).
@@ -26,24 +27,6 @@ const SIZES = {
 // inside it. The page behind is inert and scroll-locked while any is open, and
 // so is every dialog under the top one.
 const stack = [];
-
-const FOCUSABLE = 'a[href], button, input, select, textarea, summary, [tabindex], [contenteditable="true"]';
-
-/** Tab / Shift+Tab wrap inside `box`; focus that escaped is pulled back in. */
-export function trapTab(e, box) {
-  if (e.key !== 'Tab' || !box) return;
-  const items = [...box.querySelectorAll(FOCUSABLE)].filter((el) => (
-    !el.disabled && el.tabIndex >= 0 && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden'
-    && !(el.type === 'radio' && !el.checked && box.querySelector(`input[type=radio][name="${el.name}"]:checked`))
-  ));
-  if (!items.length) { e.preventDefault(); box.focus(); return; }
-  const first = items[0];
-  const last = items[items.length - 1];
-  const at = document.activeElement;
-  if (!box.contains(at) || at === box) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
-  else if (e.shiftKey && at === first) { e.preventDefault(); last.focus(); }
-  else if (!e.shiftKey && at === last) { e.preventDefault(); first.focus(); }
-}
 
 export default function Modal({ isOpen, onClose, returnFocusRef, title, eyebrow, size = 'md', children, footer, hideClose = false }) {
   const panelRef = useRef(null);
