@@ -145,10 +145,16 @@ def test_gone_source_and_wrong_format(env, fake_split):
 def test_free_plan_serves_wm_copy_only(env, fake_split, monkeypatch):
     """The served name is what _deliver returns; the canonical stays clean.
     Cloud flag is off in tests, so _deliver itself is stubbed to mark."""
+    delivered = []
+
     async def deliver(request, job_id, filename):
+        delivered.append(filename)
         return f"wm_{filename}"
     monkeypatch.setattr(app_module, "_deliver", deliver)
     r = _post(_body(env))
     assert r.json()["new_video_url"].rsplit("/", 1)[1].startswith("wm_")
+    # only the derived file goes through _deliver, never the canonical clip
+    assert delivered == ["recut_1_aaaaaa_m_clip_1.mp4"]
+    assert not (env["job_dir"] / "wm_m_clip_1.mp4").exists()
     assert (env["job_dir"] / "m_clip_1.mp4").read_bytes() == b"canonical"
     assert layout_ranges.read(str(env["job_dir"] / "recut_1_aaaaaa_m_clip_1.mp4"))
