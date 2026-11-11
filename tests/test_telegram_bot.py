@@ -336,3 +336,20 @@ def test_token_never_in_logs_or_errors(tmp_path, caplog, capsys):
     text = caplog.text + out.out + out.err
     assert "polling error" in text and "telegram sendMessage failed" in text
     assert TOKEN not in text and "fake_token_for_tests" not in text
+
+
+def test_run_from_env_silences_httpx_request_logs(caplog):
+    """httpx logs request URLs at INFO; Bot API URLs contain the token."""
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.NOTSET)
+    caplog.set_level(logging.INFO)
+    asyncio.run(tb.run_from_env(env={"TELEGRAM_INTAKE_TOKEN": TOKEN,
+                                     "TELEGRAM_ALLOWED_CHAT_IDS": ""}))
+    assert not logging.getLogger("httpx").isEnabledFor(logging.INFO)
+
+    async def call():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+                lambda r: httpx.Response(200, json={"ok": True}))) as c:
+            await c.get(f"https://api.telegram.org/bot{TOKEN}/getMe")
+    asyncio.run(call())
+    assert TOKEN not in caplog.text
