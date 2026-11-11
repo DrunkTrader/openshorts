@@ -31,7 +31,8 @@ import layout_picker
 import llm_backend
 import twitch_signals
 import heatmap_signals
-from clip_selection import (build_transcript_windows, build_window_payload, clip_count_targets,
+from clip_selection import (build_transcript_windows, build_window_payload,
+                            detail_batches, merge_adjacent, neighbour_context, clip_count_targets,
                             clip_duration_bounds, dedupe_overlapping,
                             score_batches, shortlist_target,
                             snap_clip_to_words, trim_to_best,
@@ -2247,9 +2248,9 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None, replay
         # the requested band — a user asking for 60-90s clips on the default
         # 90s windows would get clips squeezed against the window walls.
         min_secs, max_secs = clip_duration_bounds()
+        window_seconds = max(90, int(max_secs * 1.5))
         windows = build_transcript_windows(
-            transcript_result, video_duration,
-            window_seconds=max(90, int(max_secs * 1.5)))
+            transcript_result, video_duration, window_seconds=window_seconds)
         print(f"   Built {len(windows)} scoring window(s).")
         costs = []
 
@@ -2320,9 +2321,22 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None, replay
                     windows_json=json.dumps(_payload(ws), ensure_ascii=False))
             return build
 
-        shorts = _run_stage_split(client, model_name, shortlist,
-                                  _detail_prompt_for(min_clips, max_clips),
-                                  gemini_worker.DetailResponse, "shorts", costs, "detail")
+        # Neighbouring shortlisted windows become one detail window, so a moment
+        # across their seam is whole. A small-context local model gets the list
+        # in size-bounded batches (the full clip band per batch, as a split does).
+        detail_items = merge_adjacent(shortlist, windows, transcript_result,
+                                      max_span=2 * window_seconds)
+        if len(detail_items) < len(shortlist):
+            print(f"   Merged {len(shortlist)} shortlisted windows into {len(detail_items)} for detail.")
+        char_budget = int(os.environ.get("DETAIL_BATCH_CHARS", "9000"))
+
+        def _detail(items, lo, hi):
+            return [s for b in (detail_batches(items, char_budget)
+                                if llm_backend.active() and char_budget > 0 else [items])
+                    for s in _run_stage_split(client, model_name, b, _detail_prompt_for(lo, hi),
+                                              gemini_worker.DetailResponse, "shorts", costs, "detail")]
+
+        shorts = _detail(detail_items, min_clips, max_clips)
 
         # The floor lived only in the prompt, and a prompt is not a contract:
         # the model regularly returned half of it and the job shipped that.
@@ -2332,15 +2346,12 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None, replay
         # the honest answer for material that does not hold more.
         if len(shorts) < min_clips:
             used = {str(s.get("source_window_id") or "") for s in shorts}
-            spare = [w for w in shortlist if w["id"] not in used]
+            spare = [w for w in detail_items if w["id"] not in used]
             if spare:
                 missing = min_clips - len(shorts)
                 print(f"   Detail returned {len(shorts)} clip(s) of {min_clips}; "
                       f"asking the {len(spare)} unused window(s) for {missing} more.")
-                extra = _run_stage_split(
-                    client, model_name, spare,
-                    _detail_prompt_for(missing, max(missing, len(spare))),
-                    gemini_worker.DetailResponse, "shorts", costs, "detail-floor")
+                extra = _detail(spare, missing, max(missing, len(spare)))
                 if extra:
                     shorts = sorted(shorts + extra,
                                     key=lambda s: float(s.get("start") or 0))

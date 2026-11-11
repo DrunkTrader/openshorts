@@ -50,7 +50,8 @@ def _run(monkeypatch, detail_responses):
                                 for n, i in enumerate(ids)]}, None
         windows = json.loads(prompt.split("CANDIDATE_WINDOWS_JSON:")[-1]
                              .split("Return only:")[0])
-        ids = [w["id"] for w in windows]
+        # A merged window (neighbouring shortlist entries) lists its members.
+        ids = [i for w in windows for i in w.get("ids", [w["id"]])]
         calls.append(("detail", ids))
         return {"shorts": detail_responses.pop(0)}, None
 
