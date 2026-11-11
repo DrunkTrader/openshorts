@@ -2699,6 +2699,7 @@ if __name__ == '__main__':
     source_pieces_used = []
     audio_path = None    # audio-first jobs keep it apart from the video
     range_mode = False   # audio-first URL job: input_video is the audio file
+    replay_ok = False
     source_meta = {}     # what the one extraction saw (duration, title, heatmap, chapters)
     if args.url:
         # For multi-clip runs, treat --output as an OUTPUT DIRECTORY (create it if needed).
@@ -2764,6 +2765,7 @@ if __name__ == '__main__':
             except NoAudioFormat:
                 print("⚠️ No audio-only stream: downloading the whole video instead.")
                 range_mode = False
+        replay_ok = range_mode   # only the audio-first extraction fills source_meta
         if not range_mode:
             input_video, video_title = download_youtube_video(
                 args.url, output_dir, on_audio=_on_audio if use_early else None)
@@ -2950,7 +2952,8 @@ if __name__ == '__main__':
             print("♻️ Using the clips Gemini picked while the video downloaded.")
             clips_data = early_clips
         elif transcript is not None:
-            yt = str(source_meta.get('extractor') or '').lower().startswith('youtube')
+            # range jobs only: the legacy download never fills source_meta
+            yt = replay_ok and str(source_meta.get('extractor') or '').lower().startswith('youtube')
             clips_data = get_viral_clips(transcript, duration, viewer_clips=viewer_clips,
                                          replay_heat=source_meta.get('heatmap') if yt else None)
         else:

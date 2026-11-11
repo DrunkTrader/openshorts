@@ -43,7 +43,8 @@ def test_blend_zero_weight_is_identity(monkeypatch):
     assert [s["id"] for s in hs.rank_scored(_scored(), full, 3)] == ["a", "b", "c"]
     assert hs.blend(80, 1.0, 0) == 0.8
     monkeypatch.delenv("REPLAY_HEAT_WEIGHT")
-    assert abs(hs.blend(100, 0.0) - 0.7) < 1e-9
+    assert abs(hs.blend(100, 0.0) - 0.85) < 1e-9
+    assert hs.blend(80, None) == 0.8
 
 
 def test_prompt_contains_replay_rule_and_template_formats():
@@ -93,3 +94,11 @@ def test_get_viral_clips_blend_reorders_shortlist(main, monkeypatch):
     assert set(heated) != set(base)
     monkeypatch.setenv("REPLAY_HEAT_WEIGHT", "0")
     assert _shortlist(main, monkeypatch, hot_tail) == base
+
+
+def test_uncovered_windows_keep_their_pure_score():
+    # 3 of 5 windows covered, all with a middling heat percentile: equal scores
+    # must not let the uncovered ones outrank the covered ones.
+    scored = [{"id": f"w{i}", "score": 60} for i in range(5)]
+    replay = {f"w{i}": {"heat_pct": 0.5} for i in range(3)}
+    assert [s["id"] for s in hs.rank_scored(scored, replay, 5, 0.3)] == [f"w{i}" for i in range(5)]

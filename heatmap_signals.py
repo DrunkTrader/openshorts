@@ -67,10 +67,13 @@ def heat_weight() -> float:
 
 
 def blend(score, heat_pct: Optional[float], weight: Optional[float] = None) -> float:
-    """``(1-w)*score/100 + w*heat_pct``; a window without heat is neutral (0.5)."""
+    """``score/100 + w*(heat_pct - 0.5)``: heat moves a window up or down around
+    its own score, and a window without heat keeps its pure score. Centred on
+    0.5 (not ``(1-w)*s + w*pct``) so covered and uncovered windows stay on one
+    scale when coverage is partial and neither group is favoured."""
     w = heat_weight() if weight is None else min(1.0, max(0.0, weight))
-    pct = 0.5 if heat_pct is None else heat_pct
-    return (1 - w) * float(score or 0) / 100.0 + w * pct
+    base = float(score or 0) / 100.0
+    return base if heat_pct is None else base + w * (heat_pct - 0.5)
 
 
 def rank_scored(scored: List[dict], replay: Dict[str, dict], n_windows: int,
