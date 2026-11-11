@@ -212,10 +212,7 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
     return (
         /* Bottom sheet on a phone, centred dialog from sm — same shape as the
            shared Modal so the app has one overlay idiom, not two. */
-        <div
-            className="fixed inset-0 z-50 bg-black/80 flex items-end sm:items-center justify-center p-0 sm:p-4"
-            onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
-        >
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-end sm:items-center justify-center p-0 sm:p-4">
             <div
                 ref={boxRef}
                 role="dialog"

@@ -1412,7 +1412,7 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                                     className={`absolute top-1 bottom-1 rounded-[6px] border ${i === selected ? 'border-[color:var(--color-accent)]' : 'border-transparent'} ${outOfRange(seg) ? 'border-[color:var(--color-danger)]' : ''}`}
                                     style={{ left: `${left}%`, width: `${width}%`, background: `color-mix(in oklab, ${SEGMENT_COLORS[i % SEGMENT_COLORS.length]} 28%, transparent)` }}
                                 >
-                                    <span className="absolute inset-0 flex items-center justify-center readout pointer-events-none select-none">
+                                    <span className="absolute inset-0 flex items-center justify-center readout !text-ink pointer-events-none select-none">
                                         #{i + 1} · {fmt(seg.end - seg.start)}
                                     </span>
                                     {/* trim handles */}
