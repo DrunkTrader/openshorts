@@ -47,6 +47,7 @@ html[data-theme="light"]{color-scheme:light;
   --color-ink:var(--ink);--color-ink-2:var(--ink2);--color-muted:var(--muted);
   --color-rule:var(--rule);--color-rule-2:var(--rule2);--color-accent:var(--brass);--color-accent-ink:var(--accent-ink)}
 *{box-sizing:border-box}
+h1,h2,h3,.brand{text-rendering:geometricPrecision}
 html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--paper);color:var(--ink2);font-family:var(--body);
   font-size:16px;line-height:1.65;-webkit-font-smoothing:antialiased}
@@ -83,6 +84,7 @@ p{margin:0 0 1.1rem}
 .tldr p:last-child{margin-bottom:0}
 ul,ol{margin:0 0 1.1rem;padding-left:1.25rem}
 li{margin-bottom:.45rem}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .tbl{margin:1.25rem 0 1.5rem;overflow-x:auto}
 pre{overflow-x:auto;max-width:100%}
 .tbl:focus-visible,pre:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
@@ -127,7 +129,7 @@ td.os{color:var(--ink)}
 .cta-micro{font-size:.72rem;color:var(--muted);max-width:18rem;line-height:1.4}
 .best-alts ol{margin:0 0 .4rem}
 .plans td a:not(.btn-primary){display:inline-flex;align-items:center;min-height:1.75rem;padding:0 .25rem}
-@media(max-width:36rem){.plans td a{min-height:44px}}
+@media(max-width:40rem){.plans td a:not(.btn-primary){min-height:44px}}
 .plans .btn-primary{display:inline-block;text-decoration:none;white-space:nowrap}
 .cta-box .btn:hover{color:var(--accent-ink);filter:brightness(1.06)}
 .lede{font-size:1.05rem;color:var(--ink2);max-width:44rem;margin:0 0 1.5rem}
@@ -210,6 +212,9 @@ footer.site a{color:var(--muted)}
 footer.site .cols{display:grid;gap:1.5rem 2rem;grid-template-columns:repeat(auto-fill,minmax(11.5rem,1fr));margin-bottom:1.75rem}
 footer.site .col-title{font-size:.75rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink2);margin:0 0 .6rem}
 footer.site ul{list-style:none;padding:0;margin:0}
+/* Target floors: 24px everywhere, 44px on phones (links set inside a sentence are exempt). */
+footer.site li a,footer.site .more a,.crumbs a{display:inline-flex;align-items:center;min-height:1.75rem}
+@media(max-width:40rem){footer.site li a,footer.site .more a,.crumbs a{min-height:44px}}
 footer.site li{margin:0 0 .4rem}
 footer.site .more{margin:0 0 1rem;line-height:1.9}
 footer.site .more a{margin-right:.9rem;white-space:nowrap}
@@ -629,14 +634,23 @@ const relatedBlock = (related, title) =>
 // A table wider than the screen scrolls inside a focusable, named region so a
 // keyboard user can scroll it. Done once here, not in each page's markup.
 function scrollableTables(html) {
+  // Region names must be unique on a page (landmark-unique): repeats get a number.
+  const used = new Map()
+  const name = (label) => {
+    const n = (used.get(label) || 0) + 1
+    used.set(label, n)
+    return n > 1 ? `${label} ${n}` : label
+  }
   // Code blocks scroll sideways too: focusable so a keyboard can reach the rest.
-  html = html.replace(/<pre>/g, '<pre tabindex="0" role="region" aria-label="Code example">')
+  html = html.replace(/<pre>/g, () => `<pre tabindex="0" role="region" aria-label="${name('Code example')}">`)
   return html.replace(/<table\b[^>]*>[\s\S]*?<\/table>/g, (tbl, at) => {
     const cap = tbl.match(/<caption[^>]*>([\s\S]*?)<\/caption>/)
     const heads = [...html.slice(0, at).matchAll(/<h[23][^>]*>([\s\S]*?)<\/h[23]>/g)]
     const raw = cap ? cap[1] : heads.length ? heads[heads.length - 1][1] : 'Comparison'
     const label = raw.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().replace(/"/g, '&quot;')
-    return `<div class="tbl" role="region" tabindex="0" aria-label="${label}">${tbl}</div>`
+    // An empty header cell has no name for a screen reader (empty-table-header).
+    const named = tbl.replace(/<th>\s*<\/th>/g, '<th><span class="vh">Row</span></th>')
+    return `<div class="tbl" role="region" tabindex="0" aria-label="${name(label)}">${named}</div>`
   })
 }
 

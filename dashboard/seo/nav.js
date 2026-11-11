@@ -210,6 +210,16 @@ export const NAV_CSS = `
   .osn-login{display:block;text-align:center;margin-top:1rem;padding:.7rem;border:1px solid var(--color-rule-2,oklch(96% 0.006 262 / .14));border-radius:8px;
     color:var(--color-ink-2,oklch(86% 0.01 262));font-size:1rem}
 }
+/* Target floors: 24px on desktop, 44px on phones. */
+.osn-top,.osn-dd>summary,.osn-brand{min-height:1.75rem}
+.osn-top{display:inline-flex;align-items:center}
+.osn-cta{display:inline-flex;align-items:center}
+@media (max-width:40rem){
+  .osn a,.osn summary,.osn-burger,.osn-cta,.osn-brand{min-height:44px}
+  .osn-theme{width:44px;height:44px}
+  .osn-burger{min-width:44px;align-items:center;justify-content:center}
+  .osn-panel a{display:flex;align-items:center}
+}
 @media (prefers-reduced-motion:reduce){.osn-chev,.osn-cta,.osn-top{transition:none}}
 `
 
