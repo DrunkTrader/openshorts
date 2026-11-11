@@ -2421,12 +2421,12 @@ function App() {
 
                 <div onScroll={(e) => { if (status === 'processing') resultsScrollTop.current = e.currentTarget.scrollTop; }} className={`flex-1 p-1 ${status === 'processing' ? 'overflow-y-auto custom-scrollbar' : ''}`}>
                   {results && results.clips && results.clips.length > 0 ? (
-                    <div className={`grid gap-4 pb-10 ${status === 'complete' ? 'grid-cols-[repeat(auto-fill,minmax(min(100%,560px),1fr))]' : 'grid-cols-1'}`}>
+                    <div className={`grid gap-4 pb-10 ${status === 'complete' ? 'grid-cols-[repeat(auto-fill,minmax(min(100%,280px),1fr))]' : 'grid-cols-1'}`}>
                       {rankedClips.map(({ clip, index: i }) => (
                         <ResultCard
                           key={`${jobId}-${i}-${clip.video_url || ''}`}
                           clip={clip}
-                          stacked={status !== 'complete'}
+                          stacked
                           index={i}
                           jobId={jobId}
                           onEditClip={(index) => setEditingClip(index)}
