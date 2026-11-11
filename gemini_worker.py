@@ -67,6 +67,46 @@ class VisualResponse(BaseModel):
     shorts: List[VisualClipModel]
 
 
+# Copy for clips cut in code from non-speech stretches (silent_signals): the
+# model gets TEXT only (titles and the last spoken lines), one call for all the
+# clips of a job. Never frames, never video.
+class SilentCopyModel(BaseModel):
+    index: int
+    viral_hook_text: str
+    video_title_for_youtube_short: str
+    video_description_for_tiktok: str
+    video_description_for_instagram: str
+
+
+class SilentCopyResponse(BaseModel):
+    shorts: List[SilentCopyModel]
+
+
+SILENT_COPY_PROMPT_TEMPLATE = """
+You write titles and captions for short clips of a video. You cannot see the
+video: you only have the text below. Describe ONLY what that text supports. If it
+does not say what happens on screen, stay generic ("the best moment of ...").
+Never claim anything visual (no "watch him ...", no colours, no objects).
+
+VIDEO_TITLE: {video_title}
+LANGUAGE: {language}
+
+For each clip in CLIPS_JSON write, in {language}: `viral_hook_text` (at most 8
+words), `video_title_for_youtube_short` (at most 100 characters),
+`video_description_for_tiktok` and `video_description_for_instagram` (one or two
+sentences with a few hashtags). Each clip has `chapter` (the chapter of the
+video it falls in, may be empty), `previous_lines` (what was said just before it,
+may be empty) and `seconds` (its length).
+
+CLIPS_JSON:
+{clips_json}
+
+Return only:
+{{"shorts": [{{"index": <clip index>, "viral_hook_text": "...", "video_title_for_youtube_short": "...",
+"video_description_for_tiktok": "...", "video_description_for_instagram": "..."}}]}}
+"""
+
+
 VISUAL_PROMPT_TEMPLATE = """
 You are a senior short-form video editor. This video has NO speech/audio — judge
 it purely by what you SEE. Watch the whole thing and pick the {min_clips}–{max_clips} MOST engaging
