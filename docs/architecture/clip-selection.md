@@ -89,3 +89,8 @@ the legacy full download. Clip dicts keep absolute source time; each cut is
 recut, re-frame, scenes and the editor monitor resolve the piece that holds the
 segments (`app._locate_source_for_range`) and answer 409 when none does. The
 layout picker and burned-subtitle probe do not run on range jobs yet.
+
+## Replay heat and straddling windows
+
+- YouTube's "Most replayed" heatmap arrives with the one yt-dlp extraction (range jobs only, YouTube extractor only; never fetched on its own). `heatmap_signals` time-weights it per window; the windows carry `replay_heat`/`replay_peak` in the scoring prompt, and the shortlist order blends `(1-w)*score/100 + w*heat_pct` only when at least half the windows have heat. `REPLAY_HEAT_WEIGHT` (default 0.3, 0 disables). Heat is evidence, never the only rank.
+- Before the detail pass, consecutive shortlisted windows are merged (`clip_selection.merge_adjacent`, text rebuilt from segments so the 30 s overlap counts once, first id kept as `source_window_id`, run capped at twice the window size) and each gets `context_before`/`context_after` (`DETAIL_NEIGHBOUR_CHARS`, default 600 per side) with the seconds they open (`search_start`/`search_end`). A clip may use that context but must start and end inside those bounds. A local LLM gets the detail list in batches of at most `DETAIL_BATCH_CHARS` of text (default 9000, 0 = one call). `build_transcript_windows` is unchanged.
