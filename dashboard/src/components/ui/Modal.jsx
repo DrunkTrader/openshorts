@@ -22,12 +22,32 @@ const SIZES = {
   xl: 'max-w-5xl',
 };
 
-// Open modals, topmost last: Escape closes only the top one. The page behind
-// is inert and scroll-locked while any is open.
+// Open modals, topmost last: Escape closes only the top one and Tab cycles
+// inside it. The page behind is inert and scroll-locked while any is open, and
+// so is every dialog under the top one.
 const stack = [];
+
+const FOCUSABLE = 'a[href], button, input, select, textarea, summary, [tabindex], [contenteditable="true"]';
+
+/** Tab / Shift+Tab wrap inside `box`; focus that escaped is pulled back in. */
+export function trapTab(e, box) {
+  if (e.key !== 'Tab' || !box) return;
+  const items = [...box.querySelectorAll(FOCUSABLE)].filter((el) => (
+    !el.disabled && el.tabIndex >= 0 && el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden'
+    && !(el.type === 'radio' && !el.checked && box.querySelector(`input[type=radio][name="${el.name}"]:checked`))
+  ));
+  if (!items.length) { e.preventDefault(); box.focus(); return; }
+  const first = items[0];
+  const last = items[items.length - 1];
+  const at = document.activeElement;
+  if (!box.contains(at) || at === box) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
+  else if (e.shiftKey && at === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && at === last) { e.preventDefault(); first.focus(); }
+}
 
 export default function Modal({ isOpen, onClose, returnFocusRef, title, eyebrow, size = 'md', children, footer, hideClose = false }) {
   const panelRef = useRef(null);
+  const overlayRef = useRef(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   // Captured during render, before any child effect can move focus (a child
@@ -42,8 +62,13 @@ export default function Modal({ isOpen, onClose, returnFocusRef, title, eyebrow,
     const opener = openerRef.current;
     const fallback = returnFocusRef?.current;
     panelRef.current?.focus();
-    const onKey = (e) => { if (e.key === 'Escape' && closeRef.current) { e.stopPropagation(); closeRef.current(); } };
+    const onKey = (e) => {
+      if (e.key === 'Escape' && closeRef.current) { e.stopPropagation(); closeRef.current(); }
+      else trapTab(e, panelRef.current);
+    };
     const token = {};
+    stack[stack.length - 1]?.overlay?.setAttribute('inert', '');
+    token.overlay = overlayRef.current;
     stack.push(token);
     const root = document.getElementById('root');
     root?.setAttribute('inert', '');
@@ -53,6 +78,7 @@ export default function Modal({ isOpen, onClose, returnFocusRef, title, eyebrow,
     return () => {
       document.removeEventListener('keydown', onKeyTop);
       stack.splice(stack.indexOf(token), 1);
+      stack[stack.length - 1]?.overlay?.removeAttribute('inert');
       if (!stack.length) {
         root?.removeAttribute('inert');
         document.body.style.overflow = '';
@@ -72,11 +98,12 @@ export default function Modal({ isOpen, onClose, returnFocusRef, title, eyebrow,
        run taller than a centred dialog whose 4px side margins wasted the only
        width there was. From sm up it is the centred dialog it always was. */
     <div
+      ref={overlayRef}
       className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center bg-black/70 p-0 sm:p-4 animate-fade"
       onMouseDown={(e) => { if (e.target === e.currentTarget && onClose) onClose(); }}
       role="dialog"
       aria-modal="true"
-      aria-label={title || undefined}
+      aria-label={title || eyebrow || 'dialog'}
     >
       <div
         ref={panelRef}
