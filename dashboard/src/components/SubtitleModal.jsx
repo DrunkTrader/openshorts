@@ -465,7 +465,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                 ))}
                                 <label className="w-6 h-6 max-sm:w-11 max-sm:h-11 rounded-full border border-dashed border-rule2 cursor-pointer flex items-center justify-center hover:border-brass transition-colors overflow-hidden relative" title="Custom color">
                                     <span className="text-xs text-muted leading-none">+</span>
-                                    <input type="color" value={fontColor} onChange={(e) => setFontColor(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" />
+                                    <input type="color" value={fontColor} onChange={(e) => setFontColor(e.target.value)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                                 </label>
                             </div>
                         </div>
@@ -492,7 +492,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                             <div className="flex items-center gap-3">
                                 <label className="relative w-8 h-8 max-sm:w-11 max-sm:h-11 rounded-input border border-rule2 cursor-pointer overflow-hidden shrink-0" title="Border color">
                                     <div className="w-full h-full" style={{ backgroundColor: borderColor }} />
-                                    <input type="color" value={borderColor} onChange={(e) => setBorderColor(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" />
+                                    <input type="color" value={borderColor} onChange={(e) => setBorderColor(e.target.value)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                                 </label>
                                 <div className="flex-1">
                                     <input
@@ -525,7 +525,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                     <div className="flex items-center gap-3">
                                         <label className="relative w-8 h-8 max-sm:w-11 max-sm:h-11 rounded-input border border-rule2 cursor-pointer overflow-hidden shrink-0" title="Background color">
                                             <div className="w-full h-full" style={{ backgroundColor: bgColor }} />
-                                            <input type="color" value={bgColor} onChange={(e) => setBgColor(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" />
+                                            <input type="color" value={bgColor} onChange={(e) => setBgColor(e.target.value)} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                                         </label>
                                         <div className="flex-1">
                                             <input
