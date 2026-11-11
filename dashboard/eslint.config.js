@@ -26,7 +26,7 @@ export default defineConfig([
       // `catch (e)` / `catch (_)` with the error deliberately ignored is the
       // house style for best-effort localStorage and fetch calls.
       'no-unused-vars': ['error', {
-        varsIgnorePattern: '^[A-Z_]', argsIgnorePattern: '^(Icon|_)', caughtErrors: 'none',  // `icon: Icon` is rendered as <Icon />, which this config cannot see
+        varsIgnorePattern: '^[A-Z_]', argsIgnorePattern: '^(Icon|Tag|_)', caughtErrors: 'none',  // `icon: Icon` / `as: Tag` are rendered as JSX tags, which this config cannot see
       }],
       'no-empty': ['error', { allowEmptyCatch: true }],
       // Contexts and modals export a hook or a constant next to the component.
