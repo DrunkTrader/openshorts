@@ -440,6 +440,10 @@ lives in [`examples/n8n/`](examples/n8n/).
 
 ---
 
+## Optional integrations
+
+- **Telegram intake bot** (self-host): send a link or a small video to your own bot and get the clips back in chat. See [docs/telegram-bot.md](docs/telegram-bot.md).
+
 ## Tech Stack
 
 | Layer | Technology |
