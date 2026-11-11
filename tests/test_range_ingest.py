@@ -79,7 +79,7 @@ def test_record_source_keys_for_a_range_job():
     meta = {}
     pieces = [{"file": "T.piece_1.mp4", "start": 90.0, "end": 140.0},
               {"file": "T.piece_2.mp4", "start": 390.0, "end": 450.0}]
-    range_ingest.record_source(meta, "/job/T.audio.m4a", pieces, "https://y.example/v", 600.0)
+    range_ingest.record_source(meta, "/job/T.audio.m4a", pieces, "https://y.example/v", 600.0, range_mode=True)
     assert meta == {"source_video": "T.piece_1.mp4", "source_pieces": pieces,
                     "source_url": "https://y.example/v", "source_duration": 600.0}
 
@@ -102,3 +102,10 @@ def test_cleanup_is_called_with_audio_sidecar_and_keeps_pieces(tmp_path):
     range_ingest.cleanup(str(tmp_path), str(tmp_path / "T.audio.m4a"),
                          [{"file": "T.piece_1.mp4"}], keep_source=True)
     assert sorted(p.name for p in tmp_path.iterdir()) == ["T.piece_1.mp4"]
+
+
+def test_range_mode_records_url_and_duration_even_without_pieces():
+    meta = {}
+    range_ingest.record_source(meta, "/job/T.audio.m4a", [], "https://y.example/v", 600.0, range_mode=True)
+    assert meta["source_url"] == "https://y.example/v" and meta["source_duration"] == 600.0
+    assert "source_pieces" not in meta

@@ -58,13 +58,14 @@ def cleanup(output_dir, audio_path, pieces, keep_source):
             pass
 
 
-def probe_pieces(output_dir, pieces, aspect, fits, dims, captions_on):
+def probe_pieces(output_dir, pieces, aspect, fits, dims, captions_on, skip_analysis=False):
     """The picks that need frames (layout picker, burned-in subtitle band),
     run once on the pieces. A vertical first piece skips both, as the
     whole-source path does. Returns the subtitle band or None."""
     import burned_subtitles
     import layout_picker
 
+    captions_on = captions_on and not skip_analysis
     paths = [os.path.join(output_dir, p["file"]) for p in pieces]
     seconds = sum(p["end"] - p["start"] for p in pieces)
     if layout_picker.ENABLED or captions_on:
@@ -88,11 +89,12 @@ def probe_pieces(output_dir, pieces, aspect, fits, dims, captions_on):
     return None
 
 
-def record_source(clips_data, input_video, pieces, url=None, duration=None):
+def record_source(clips_data, input_video, pieces, url=None, duration=None, range_mode=False):
     """The source keys the editor and recut read back from the metadata."""
     clips_data['source_video'] = os.path.basename(pieces[0]["file"] if pieces else input_video)
     if pieces:
         clips_data['source_pieces'] = pieces
+    if range_mode:
         clips_data['source_url'] = url
         clips_data['source_duration'] = duration
 

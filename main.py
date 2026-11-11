@@ -2966,7 +2966,8 @@ if __name__ == '__main__':
                         _c.release()
                 source_subtitle_band = range_ingest.probe_pieces(
                     output_dir, source_pieces, ASPECT_RATIO, source_already_fits, _dims,
-                    os.environ.get("AUTO_CAPTIONS", "1").strip() != "0")
+                    os.environ.get("AUTO_CAPTIONS", "1").strip() != "0",
+                    args.skip_analysis)
 
             # Save metadata. Silent videos have no transcript → no subtitles,
             # which is correct (there's no speech to caption).
@@ -2976,7 +2977,7 @@ if __name__ == '__main__':
             # basename is enough — the file sits in the job dir (URL jobs with
             # --keep-original) or in uploads/ (upload jobs).
             range_ingest.record_source(clips_data, input_video, source_pieces,
-                                       args.url if range_mode else None, duration)
+                                       args.url if range_mode else None, duration, range_mode)
             clips_data['output_format'] = output_format
             if source_subtitle_band:
                 clips_data['source_subtitle_band'] = source_subtitle_band
