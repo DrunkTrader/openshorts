@@ -293,7 +293,8 @@ export default function ScheduleWeekModal({ isOpen, onClose, clips, jobId, uploa
                 {schedule.map(({ clip, index, date }) => (
                     <div key={index} className="flex items-center gap-3 py-2.5">
                         <div className="w-24 shrink-0">
-                            <span className="readout">{getDayLabel(date)} · {formatDate(date)}</span>
+                            <span className="readout block text-ink2 whitespace-nowrap">{getDayLabel(date)}</span>
+                            <span className="readout block whitespace-nowrap">{formatDate(date)}</span>
                         </div>
 
                         <div className="flex-1 min-w-0">
