@@ -74,6 +74,7 @@ def probe_pieces(output_dir, pieces, aspect, fits, dims, captions_on):
                 print(f"   ↕️  Source is {w}x{h} — already vertical, no layout to pick.")
             return None
     if layout_picker.ENABLED:
+        print(f"🎛️ Layout probe on {len(paths)} piece(s), {seconds:.0f}s")
         try:
             layout_picker.pick_and_apply(paths, seconds)
         except Exception as e:
