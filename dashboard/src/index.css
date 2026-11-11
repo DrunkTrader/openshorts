@@ -68,6 +68,13 @@
     input[type='range'] { min-height: 44px; }
   }
 
+  /* Desktop floor: 24px for the landing's underlined text links and guide nav. */
+  @media (min-width: 641px) {
+    a[href].underline, nav[aria-label='Guides and comparisons'] a[href], footer a[href] {
+      display: inline-flex; align-items: center; justify-content: center; min-height: 24px; min-width: 24px; max-width: 100%;
+    }
+  }
+
   ::selection {
     background: var(--color-accent);
     color: var(--color-accent-ink);
