@@ -456,7 +456,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
               </div>
 
               <div>
-                <label className="eyebrow block mb-2">Website URL <span className="opacity-60">(optional)</span></label>
+                <label className="eyebrow block mb-2">Website URL <span>(optional)</span></label>
                 <div className="flex gap-3">
                   <div className="relative flex-1">
                     <Globe size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
@@ -475,7 +475,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
 
               <div>
                 <label className="eyebrow block mb-2">
-                  {url.trim() ? 'Extra context' : 'Describe your product/business'} <span className="opacity-60">{url.trim() ? '(optional)' : '(required if no URL)'}</span>
+                  {url.trim() ? 'Extra context' : 'Describe your product/business'} <span>{url.trim() ? '(optional)' : '(required if no URL)'}</span>
                 </label>
                 <textarea
                   value={description}
@@ -1225,7 +1225,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                   <span className="readout flex items-center gap-2">
                     <Terminal size={12} /> Generation Logs
                   </span>
-                  <button onClick={() => setLogsExpanded(!logsExpanded)} className="text-muted hover:text-ink transition-colors">
+                  <button onClick={() => setLogsExpanded(!logsExpanded)} aria-label="toggle generation logs" aria-expanded={logsExpanded} className="text-muted hover:text-ink transition-colors">
                     <ChevronDown size={14} className={logsExpanded ? '' : 'rotate-180'} />
                   </button>
                 </div>

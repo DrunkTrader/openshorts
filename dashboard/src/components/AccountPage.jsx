@@ -146,7 +146,7 @@ export default function AccountPage() {
       <div className="flex items-end justify-between gap-4">
         <div>
           <p className="eyebrow mb-1.5">ACCOUNT</p>
-          <h2 className="font-display lowercase text-2xl text-ink leading-tight">Your account</h2>
+          <h1 className="font-display lowercase text-2xl text-ink leading-tight">Your account</h1>
           <p className="text-muted text-sm mt-1">{me.user?.email}</p>
         </div>
         <button onClick={logout} className="btn-quiet shrink-0">
