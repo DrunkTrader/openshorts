@@ -32,9 +32,9 @@ const CSS = `
   --brass:oklch(76% 0.17 50);--ok:oklch(75% 0.11 150);
   --accent-ink:oklch(17% 0.03 50);--danger:oklch(75% 0.15 25);
   color-scheme:dark;
-  --display:"Instrument Serif",ui-serif,Georgia,serif;
-  --body:"Geist",ui-sans-serif,system-ui,-apple-system,sans-serif;
-  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,monospace;
+  --display:"Instrument Serif","Instrument Serif Fallback",ui-serif,Georgia,serif;
+  --body:"Geist","Geist Fallback",ui-sans-serif,system-ui,-apple-system,sans-serif;
+  --mono:"JetBrains Mono","JetBrains Mono Fallback",ui-monospace,SFMono-Regular,monospace;
 }
 /* Light theme: same values as dashboard/src/tokens.css. NAV_CSS reads the
  * --color-* aliases, which fall back to dark when a page defines none. */
@@ -659,6 +659,8 @@ ${page.noindex ? '' : `<link rel="canonical" href="${canonical}">\n`}<meta name=
     page.noindex ? 'noindex,follow' : 'index,follow,max-image-preview:large,max-snippet:-1'
   }">
 ${hreflangLinks(page)}<link rel="icon" type="image/png" href="/logo-openshorts.png">
+<link rel="preload" href="/fonts/geist-400-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/instrument-serif-400-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/fonts.css">
 ${ANALYTICS}
 ${page.noindex ? '' : ATTRIBUTION}
