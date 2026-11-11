@@ -1437,7 +1437,7 @@ function App() {
       </nav>
 
       <div className="p-2.5 lg:p-3 border-t border-rule space-y-0.5">
-        <NavFooterLinks collapsed />
+        {NavFooterLinks({ collapsed: true })}
       </div>
     </aside>
   );
@@ -1502,7 +1502,7 @@ function App() {
         </nav>
 
         <div className="px-3 py-3 border-t border-rule space-y-0.5 safe-bottom shrink-0">
-          <NavFooterLinks />
+          {NavFooterLinks({})}
         </div>
       </div>
     </div>
@@ -1562,8 +1562,8 @@ function App() {
       >
         Skip to create
       </button>
-      <Sidebar />
-      {navOpen && <MobileNavDrawer />}
+      {Sidebar()}
+      {navOpen && MobileNavDrawer()}
 
       <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden relative">
         {/* Top Header */}
@@ -2493,7 +2493,7 @@ function App() {
 
         {/* Phone navigation. A flex sibling of the scrolling pane, not a fixed
             overlay, so content is never trapped behind it. */}
-        <MobileTabBar />
+        {MobileTabBar()}
       </div>
 
       {/* Missing API Key Modal */}
