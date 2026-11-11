@@ -2632,7 +2632,7 @@ const gtaClips = () => ({
   tldr: [
     'A GTA 5 stream is four to eight hours of 16:9 gameplay with a webcam box in one corner. OpenShorts reads the whole VOD, picks the moments worth posting out of what was said, and reframes each one so the gameplay keeps its full width and the facecam is enlarged underneath it instead of cropped away.',
     'Length is what makes this expensive everywhere else. Tools in this category bill one credit per minute of source you import, so a single eight-hour stream is 480 minutes: more than the 300 minutes a $29/month Opus Clip Pro plan includes (checked 2026-07-27). Self-hosted OpenShorts has no meter at all; the hosted edition starts at $12/month.',
-    'Gameplay with no commentary is handled too, and it is where most clippers stop: when a stream has no usable speech OpenShorts switches by itself to a vision pass where Gemini watches the footage and picks the moments, instead of failing on an empty transcript. The switch is automatic, and long silent captures are watched in stretches rather than rejected.',
+    'Gameplay with no commentary is handled too, and it is where most clippers stop: when a stream has no usable speech OpenShorts first clips the silent stretches from their loudest moments and the replay heatmap, and only when there is nothing to rank does it switch to a vision pass where Gemini watches the footage and picks the moments, instead of failing on an empty transcript. The switch is automatic, and long silent captures are watched in stretches rather than rejected.',
   ],
   body: `
 <h2>Why GTA clips break a normal auto-clipper</h2>
@@ -2714,7 +2714,9 @@ has no transcript to read, so OpenShorts does not use one.</p>
 <p>It switches paths on its own, and it does not need to be told to. Footage
 with no audio track at all, and footage whose transcript comes back under 8
 words or under 5 words per minute (music-only streams, a mic that was muted the
-whole session), both trip the same branch: the video itself goes to Gemini,
+whole session), are first clipped from the loudest or most replayed moments of each silent
+stretch, with no model watching anything. Only when there is no audio or replay
+signal to rank does the same branch send the video itself to Gemini,
 which watches it and returns the same 3 to 15 moments in the same 15 to 60
 second band as the transcript path. Everything downstream is identical, layouts
 and inset detection included. The one difference is that the clips come out
@@ -2761,7 +2763,7 @@ ${faqBlock([
   },
   {
     q: 'Does it work on gameplay with no commentary?',
-    a: 'Yes, and it switches by itself. Footage with no audio track, or whose transcript comes back under 8 words or under 5 words per minute, goes down a vision pass instead: Gemini watches the footage and returns the same 3 to 15 moments, with the same layouts and inset detection after it. The clips come out without captions, since there is no speech to caption. A long silent capture is watched in stretches of up to 40 minutes, up to a little over five hours per job; giving it only the session you care about costs fewer minutes.',
+    a: 'Yes, and it switches by itself. Footage with no audio track, or whose transcript comes back under 8 words or under 5 words per minute, is clipped from its loudest or most replayed moments, and with no such signal goes down a vision pass instead: Gemini watches the footage and returns the same 3 to 15 moments, with the same layouts and inset detection after it. The clips come out without captions, since there is no speech to caption. A long silent capture is watched in stretches of up to 40 minutes, up to a little over five hours per job; giving it only the session you care about costs fewer minutes.',
   },
   {
     q: 'Is it free for streamers?',
@@ -3051,7 +3053,7 @@ the spoiler rule below.</p>`,
   },
   {
     q: 'Does it work with no commentary?',
-    a: 'Yes. When the footage has no audio track, or its transcript comes back under 8 words in total or under 5 words a minute, OpenShorts switches by itself to a vision pass where Gemini watches the footage and picks the moments. Those clips have no captions, because there is no speech to caption. Layouts work the same.',
+    a: 'Yes. When the footage has no audio track, or its transcript comes back under 8 words in total or under 5 words a minute, OpenShorts clips the silent stretches from their loudest or most replayed moments, and only with no such signal switches to a vision pass where Gemini watches the footage and picks the moments. Those clips have no captions, because there is no speech to caption. Layouts work the same.',
     detail: `<p>Long silent footage is watched in stretches of up to 40 minutes, and the
 picks from every stretch are ranked together into one list. A job watches up to
 eight stretches, a little over five hours; past that only the first five hours
@@ -3274,7 +3276,7 @@ Instagram raised Reels to 3 minutes in January 2025.</p>`,
   },
   {
     q: 'Does it work without commentary?',
-    a: 'Yes. When the recording has no audio track, or its transcript comes back under 8 words in total or under 5 words a minute, OpenShorts switches by itself to a vision pass where Gemini watches the footage and picks the moments. Those clips have no captions, because there is no speech to caption. Layouts work the same.',
+    a: 'Yes. When the recording has no audio track, or its transcript comes back under 8 words in total or under 5 words a minute, OpenShorts clips the silent stretches from their loudest or most replayed moments, and only with no such signal switches to a vision pass where Gemini watches the footage and picks the moments. Those clips have no captions, because there is no speech to caption. Layouts work the same.',
     detail: `<p>Long silent footage is watched in stretches of up to 40 minutes, and the
 picks from every stretch are ranked together. A job watches up to eight
 stretches, a little over five hours; past that only the first five hours are
