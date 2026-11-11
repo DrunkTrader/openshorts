@@ -52,3 +52,114 @@ def test_window_signals_from_energy_and_heat():
     ss.window_signals(ws, {"energy": curve, "heatmap": [{"start_time": 0, "end_time": 90, "value": 0.7}]})
     assert ws[0]["heat"] == 0.7 and ws[1]["heat"] is None
     assert ws[1]["peak"] == 120.5 and ws[1]["audio_energy"] > ws[0]["audio_energy"]
+
+
+# --- through get_viral_clips: one pipeline for speech and non-speech windows ---
+import json  # noqa: E402
+import re  # noqa: E402
+
+
+def _seg(a, b):
+    return {"start": float(a), "end": float(b), "text": "so we keep talking about the plan here " * 2,
+            "words": [{"word": "plan", "start": float(a), "end": a + 0.4}]}
+
+
+def _mixed():
+    """talk 0-300, silence 300-600, talk 600-900."""
+    segs = [_seg(t, t + 10) for t in list(range(0, 300, 10)) + list(range(600, 900, 10))]
+    return {"language": "en", "segments": segs}
+
+
+def _curve(peaks):
+    c = [0.05] * 900
+    for t in peaks:
+        for k in range(8):
+            c[t + k] = 1.0 if k == 0 else 0.6
+    return c
+
+
+def _detail_clip(start, wid):
+    return {"start": start, "end": start + 30, "source_window_id": wid, "predicted_score": 80,
+            "video_description_for_tiktok": "d", "video_description_for_instagram": "d",
+            "video_title_for_youtube_short": "t", "viral_hook_text": "h", "why": ""}
+
+
+def _drive(main, monkeypatch, curve, detail=lambda ids: [], silent=True):
+    calls = []
+
+    def fake_stage(client, model, prompt, schema):
+        gw = main.gemini_worker
+        if schema is gw.SilentCopyResponse:
+            n = prompt.count('"index"')
+            calls.append(("copy", prompt))
+            return {"shorts": [{"index": i, "viral_hook_text": "H", "video_title_for_youtube_short": "T",
+                                "video_description_for_tiktok": "d", "video_description_for_instagram": "d"}
+                               for i in range(n)]}, None
+        if schema is gw.ScoreResponse:
+            payload = json.loads(prompt.split("WINDOWS_JSON:")[-1].split("Return only:")[0])
+            calls.append(("score", prompt))
+            return {"windows": [{"id": w["id"], "start": 0, "end": 90, "score": 90 - n, "reason": "r"}
+                                for n, w in enumerate(payload)]}, None
+        wins = json.loads(prompt.split("CANDIDATE_WINDOWS_JSON:")[-1].split("Return only:")[0])
+        ids = [i for w in wins for i in w.get("ids", [w["id"]])]
+        calls.append(("detail", prompt))
+        return {"shorts": detail(ids)}, None
+
+    monkeypatch.setattr(main, "_run_gemini_stage", fake_stage)
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(main.genai, "Client", lambda api_key=None: object())
+    monkeypatch.setattr(main.silent_signals, "audio_energy_curve", lambda *a, **k: curve)
+    out = main.get_viral_clips(_mixed(), 900.0, silent={"audio": "a.m4a", "title": "Race", "chapters": []}
+                               if silent else None)
+    return (out or {}).get("shorts", []), calls
+
+
+def test_global_top_n_merges_groups(main, monkeypatch, capsys):
+    clips, _ = _drive(main, monkeypatch, _curve([310, 390, 470, 550]),
+                      detail=lambda ids: [_detail_clip(0, ids[0])])
+    out = capsys.readouterr().out
+    m = re.search(r"Shortlist: (\d+) speech \+ (\d+) non-speech", out)
+    # shortlist_target(900) = 10: the global top N, not "up to K per batch", and
+    # neither group starves
+    assert m and int(m.group(1)) + int(m.group(2)) == 10 and int(m.group(1)) > 0 and int(m.group(2)) > 0
+    assert len(ss.merge_rankings(list(range(8)), list("abcd"), 10)) == 10
+    assert len(ss.merge_rankings(list(range(3)), list("ab"), 10)) == 5
+    assert any(c.get("kind") == "nonspeech" for c in clips)
+
+
+def test_nonspeech_windows_never_sent_to_the_scoring_or_detail_prompts(main, monkeypatch):
+    _, calls = _drive(main, monkeypatch, _curve([310, 390, 470, 550]))
+    for kind, prompt in calls:
+        if kind in ("score", "detail"):
+            assert "window_ns" not in prompt
+    assert [k for k, _ in calls].count("copy") == 1   # one batched call for every silent clip
+
+
+def test_silent_stretch_without_signal_is_skipped(main, monkeypatch):
+    clips, calls = _drive(main, monkeypatch, [0.0] * 900,
+                          detail=lambda ids: [_detail_clip(0, ids[0])])
+    assert not [c for c in clips if c.get("kind") == "nonspeech"]
+    assert "copy" not in [k for k, _ in calls]
+
+
+def test_min_clips_floor_enforced_in_code_with_nonspeech(main, monkeypatch):
+    monkeypatch.setenv("CLIP_TARGET_MIN", "4")
+    clips, calls = _drive(main, monkeypatch, _curve([310, 390, 470, 550]))
+    silent_clips = [c for c in clips if c.get("kind") == "nonspeech"]
+    # the detail pass returned nothing: the floor of 4 is met from the silent windows alone
+    assert len(silent_clips) == 4 and len({c["source_window_id"] for c in silent_clips}) == 4
+    assert all(c["video_title_for_youtube_short"] == "T" for c in silent_clips)
+
+
+def test_local_llm_gets_only_a_text_prompt(main, monkeypatch):
+    seen = []
+
+    def fake_generate_json(*args, **kwargs):
+        seen.append((args, kwargs))
+        return {"shorts": []}, None
+
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:1/v1")
+    monkeypatch.setattr(main.llm_backend, "generate_json", fake_generate_json)
+    main._run_gemini_stage(None, "m", "a text prompt", main.gemini_worker.SilentCopyResponse)
+    args, kwargs = seen[0]
+    assert isinstance(args[0], str) and set(kwargs) <= {"model"} and len(args) == 2

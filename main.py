@@ -31,7 +31,9 @@ import layout_picker
 import llm_backend
 import twitch_signals
 import heatmap_signals
-from clip_selection import (build_transcript_windows, build_window_payload,
+import silent_copy
+import silent_signals
+from clip_selection import (build_timeline_windows, silent_stretches, build_transcript_windows, build_window_payload,
                             bound_clips, detail_batches, merge_adjacent, neighbour_context, clip_count_targets,
                             clip_duration_bounds, dedupe_overlapping,
                             score_batches, shortlist_target,
@@ -2203,7 +2205,8 @@ def score_batch_size():
     return 3 if llm_backend.active() else 8
 
 
-def get_viral_clips(transcript_result, video_duration, viewer_clips=None, replay_heat=None):
+def get_viral_clips(transcript_result, video_duration, viewer_clips=None, replay_heat=None,
+                    silent=None):
     """Two-pass clip selection: score transcript windows, then detail the best.
 
     Windowing gives even coverage on long videos (a single call over the whole
@@ -2218,6 +2221,12 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None, replay
     ``replay_heat`` (YouTube's "Most replayed" heatmap from the one
     extraction): shown on the windows it covers and, with enough coverage,
     blended into the shortlist order (``heatmap_signals``). Never the only rank.
+
+    ``silent`` (``{"audio": path, "title", "chapters"}``) opens the timeline to
+    stretches without speech: they become windows scored in code from the heat
+    and the audio energy (``silent_signals``), ranked with the speech windows in
+    one global top N, cut around their peak, and their copy comes from one
+    text-only call. Without it only speech windows exist, as before.
     """
     language = str(transcript_result.get('language') or 'unknown')
     if llm_backend.active():
@@ -2249,8 +2258,27 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None, replay
         # 90s windows would get clips squeezed against the window walls.
         min_secs, max_secs = clip_duration_bounds()
         window_seconds = max(90, int(max_secs * 1.5))
-        windows = build_transcript_windows(
-            transcript_result, video_duration, window_seconds=window_seconds)
+        ns_ranked, curve = [], []
+        if silent is None:
+            windows = build_transcript_windows(
+                transcript_result, video_duration, window_seconds=window_seconds)
+        else:
+            signals = None
+            if silent_stretches(transcript_result, video_duration):
+                curve = (silent_signals.audio_energy_curve(silent["audio"], video_duration)
+                         if silent.get("audio") else [])
+                signals = {"heatmap": replay_heat, "energy": curve,
+                           "energy_step": silent_signals.ENERGY_STEP}
+            windows = build_timeline_windows(
+                transcript_result, video_duration, signals, window_seconds=window_seconds)
+            ns_ranked = silent_signals.score_nonspeech(
+                [w for w in windows if w.get("kind") == "nonspeech"])
+            windows = [w for w in windows if w.get("kind") != "nonspeech"]
+            if ns_ranked:
+                print(f"   {len(ns_ranked)} non-speech window(s) with a signal, scored in code.")
+            if not windows and not ns_ranked:
+                print("   No speech window and no non-speech window with a signal.")
+                return None
         print(f"   Built {len(windows)} scoring window(s).")
         costs = []
 
@@ -2298,17 +2326,28 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None, replay
         shortlist = [by_id[w["id"]] for w in scored[:target] if w.get("id") in by_id]
         if not shortlist:
             shortlist = windows[:target]  # scoring returned nothing usable
-        if heat:
+        ranked = [by_id[w["id"]] for w in scored if w.get("id") in by_id] or windows
+        ns_short, ns_spare = [], []
+        if ns_ranked:
+            # One global top N over both groups, by percentile within each:
+            # neither starves, and the shortlist is `target` whenever there are
+            # that many windows (never "up to K per group").
+            merged = silent_signals.merge_rankings(ranked, ns_ranked, target)
+            ns_short = [w for w in merged if w.get("kind") == "nonspeech"]
+            ns_spare = [w for w in ns_ranked if w not in ns_short]
+            shortlist = [w for w in merged if w.get("kind") != "nonspeech"]
+            target = len(shortlist)
+            print(f"   Shortlist: {target} speech + {len(ns_short)} non-speech window(s).")
+        if heat and shortlist:
             before = {w["id"] for w in shortlist}
-            ranked = [by_id[w["id"]] for w in scored if w.get("id") in by_id] or windows
             shortlist = twitch_signals.promote_hot_windows(shortlist, ranked, heat, target)
             added = [w["id"] for w in shortlist if w["id"] not in before]
             if added:
                 print(f"   👀 Promoted {len(added)} window(s) viewers clipped: {added}")
-        print(f"   Shortlisted {len(shortlist)} window(s) for detail.")
+        print(f"   Shortlisted {len(shortlist) + len(ns_short)} window(s) for detail.")
 
         # --- Pass 2: detailed clip extraction on the shortlist ---
-        min_clips, max_clips = clip_count_targets(len(shortlist))
+        min_clips, max_clips = clip_count_targets(len(shortlist) + len(ns_short))
 
         def _detail_prompt_for(lo, hi):
             # A split batch keeps the full clip-count band: a short list can
@@ -2352,7 +2391,7 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None, replay
         def _finish(raw):
             """Bound, snap and dedupe the model's clips. The floor is judged on
             what survives this, not on what the model returned."""
-            kept, notes = bound_clips(raw, detail_items, video_duration, min_secs, max_secs)
+            kept, notes = bound_clips(raw, detail_items + ns_ranked, video_duration, min_secs, max_secs)
             for note in notes:
                 print(f"   Bounds: {note}")
             snapped = []
@@ -2372,7 +2411,13 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None, replay
                       f"better-scored one.")
             return deduped
 
-        raw = _detail(detail_items, min_clips, max_clips)
+        def _cut(ws):
+            """Clips cut in code around the energy peak of non-speech windows."""
+            cuts = [silent_signals.cut_from_peak(w, curve, min_secs, max_secs) for w in ws]
+            return [c for c in cuts if c]
+
+        raw = _detail(detail_items, min_clips, max_clips) if detail_items else []
+        raw += _cut(ns_short)
         shorts = _finish(raw)
 
         # The floor lived only in the prompt, and a prompt is not a contract:
@@ -2391,9 +2436,17 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None, replay
                       f"asking the {len(spare)} unused window(s) for {missing} more.")
                 extra = _detail(spare, missing, max(missing, len(spare)))
                 if extra:
-                    shorts = sorted(_finish(raw + extra),
+                    raw = raw + extra
+                    shorts = sorted(_finish(raw),
                                     key=lambda s: float(s.get("start") or 0))
                     print(f"   Recovered; {len(shorts)} clip(s) now.")
+            if len(shorts) < min_clips and ns_spare:
+                # Non-speech windows past the shortlist are cut in code, no call.
+                extra = _cut(ns_spare[:min_clips - len(shorts)])
+                if extra:
+                    raw = raw + extra
+                    shorts = sorted(_finish(raw), key=lambda s: float(s.get("start") or 0))
+                    print(f"   Added {len(extra)} non-speech clip(s) for the floor; {len(shorts)} clip(s) now.")
             if len(shorts) < min_clips:
                 print(f"   Floor of {min_clips} not reached ({len(shorts)}): the material may not hold more.")
 
@@ -2405,6 +2458,14 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None, replay
             shorts = trim_to_best(shorts, max_clips)
             print(f"   Kept the {max_clips} best-scoring clip(s) of "
                   f"{max_clips + dropped}.")
+
+        # Copy for the clips cut in code: text only, one call for all of them.
+        silent_clips = [s for s in shorts if s.get("kind") == "nonspeech"]
+        if silent_clips:
+            costs.extend(silent_copy.fill_silent_copy(
+                silent_clips, lambda p, sch: _run_gemini_stage(client, model_name, p, sch),
+                silent.get("title"), silent.get("chapters"), transcript_result,
+                language if language not in ("none", "unknown") else "the language of VIDEO_TITLE"))
 
         # Aggregate cost across both passes.
         cost_analysis = None
@@ -2451,6 +2512,35 @@ def speech_is_sparse(transcript, duration):
                 for seg in (transcript or {}).get("segments", []))
     minutes = max(float(duration or 0) / 60.0, 1e-6)
     return words < MIN_SPEECH_WORDS or words / minutes < MIN_SPEECH_WORDS_PER_MIN
+
+
+def select_clips(transcript, duration, video, viewer_clips=None, replay_heat=None,
+                 silent=None, fetch_full=None):
+    """Pick the clips of one job. Returns ``(clips_data, video, title, vision)``;
+    ``video``/``title`` are None unless ``fetch_full`` ran (range jobs).
+
+    The timeline is clipped from its speech and from its non-speech stretches
+    (``get_viral_clips`` with ``silent``). Only when that finds nothing AND the
+    speech is sparse (or there is no audio track at all) does the one stage that
+    watches the video, ``get_visual_clips``, take over: it needs a Gemini key
+    and a full video (``fetch_full``, a logged legacy download for range jobs).
+    """
+    if transcript is not None:
+        clips = get_viral_clips(transcript, duration, viewer_clips=viewer_clips,
+                                replay_heat=replay_heat, silent=silent)
+        if clips or not speech_is_sparse(transcript, duration):
+            return clips, None, None, False
+        print("🔇 Too little speech and no usable audio or heat signal in the silent stretches.")
+    if not os.getenv("GEMINI_API_KEY"):
+        raise RuntimeError(
+            "Clip detection failed: this footage has no speech to clip by and no audio or "
+            "replay-heat peaks to rank, so it can only be clipped by watching it, and that needs "
+            "a GEMINI_API_KEY (a text-only LLM server cannot see the footage).")
+    title = None
+    if fetch_full is not None:
+        print("↩️ Falling back to the full download so Gemini can watch the video.")
+        video, title = fetch_full()
+    return get_visual_clips(video, duration, viewer_clips=viewer_clips), video, title, True
 
 
 # Silent footage is sent to Gemini as video (~300 tokens/s): an hour no longer
@@ -2752,9 +2842,9 @@ if __name__ == '__main__':
             try:
                 t = transcribe_video(audio_path)
                 early["transcript"] = t
-                if audio_duration and not speech_is_sparse(t, audio_duration):
-                    early["clips"] = get_viral_clips(t, audio_duration,
-                                                     viewer_clips=viewer_clips)
+                if audio_duration:
+                    early["clips"] = get_viral_clips(t, audio_duration, viewer_clips=viewer_clips,
+                                                     silent={"audio": audio_path})
             except Exception as e:
                 print(f"   ℹ️ Early transcription skipped ({type(e).__name__}: {e}).")
                 early["transcript"] = early["clips"] = None
@@ -2952,35 +3042,36 @@ if __name__ == '__main__':
             except NoAudioError as e:
                 print(f"🔇 {e} — switching to visual analysis.")
 
-        # Music-only or wordless footage transcribes to a handful of words.
-        # Clip it by what is on screen instead, like a video with no audio.
+        # Music-only or wordless footage transcribes to a handful of words: its
+        # silent stretches are clipped from audio and heat (select_clips), and
+        # the vision route is the last resort.
         if transcript is not None and speech_is_sparse(transcript, duration):
             n_words = sum(len((sg.get("text") or "").split()) for sg in transcript["segments"])
-            print(f"🔇 Only {n_words} word(s) of speech in {duration:.0f}s — "
-                  f"switching to visual analysis.")
-            transcript = None
+            print(f"🔇 Only {n_words} word(s) of speech in {duration:.0f}s.")
 
-        import range_ingest
-        _full = range_ingest.full_download_fallback(
-            range_mode, transcript, lambda: download_youtube_video(args.url, output_dir))
-        if _full:
-            input_video, video_title = _full
-            source_subtitle_band = _probe_source(input_video)
-            range_mode = False
-
-        # 4. Gemini Analysis (transcript-driven, or vision for silent videos)
+        # 4. Pick clips (speech windows, non-speech windows, vision as last resort)
         early_clips = (early_state or {}).get("clips") if early_state else None
+        yt = replay_ok and str(source_meta.get('extractor') or '').lower().startswith('youtube')
+        replay_heat = source_meta.get('heatmap') if yt else None
+        vision = False
         if (transcript is not None and early_clips
                 and transcript is early_state["transcript"]):
             print("♻️ Using the clips Gemini picked while the video downloaded.")
             clips_data = early_clips
-        elif transcript is not None:
-            # range jobs only: the legacy download never fills source_meta
-            yt = replay_ok and str(source_meta.get('extractor') or '').lower().startswith('youtube')
-            clips_data = get_viral_clips(transcript, duration, viewer_clips=viewer_clips,
-                                         replay_heat=source_meta.get('heatmap') if yt else None)
         else:
-            clips_data = get_visual_clips(input_video, duration, viewer_clips=viewer_clips)
+            def _fetch_full():
+                return download_youtube_video(args.url, output_dir)
+            clips_data, _full_video, _full_title, vision = select_clips(
+                transcript, duration, input_video, viewer_clips=viewer_clips, replay_heat=replay_heat,
+                silent={"audio": input_video, "title": source_meta.get('title') or video_title,
+                        "chapters": source_meta.get('chapters')} if transcript is not None else None,
+                fetch_full=_fetch_full if range_mode else None)
+            if _full_video:
+                input_video, video_title = _full_video, _full_title
+                source_subtitle_band = _probe_source(input_video)
+                range_mode = False
+        if vision or (transcript is not None and speech_is_sparse(transcript, duration)):
+            transcript = None  # stray words are not speech to caption
 
         if not clips_data or 'shorts' not in clips_data:
             # Deliberately fail instead of reframing the whole video: that path
