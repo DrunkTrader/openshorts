@@ -25,3 +25,11 @@ def _scrub_env(monkeypatch):
     for name in list(os.environ):
         if name in _SCRUBBED or name.startswith(("LLM_", "TELEGRAM_")):
             monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(scope="module")
+def main():
+    """``main`` importable without the heavy ML stack (see main_harness)."""
+    from main_harness import light_main
+    with light_main() as m:
+        yield m

@@ -2632,7 +2632,7 @@ const gtaClips = () => ({
   tldr: [
     'A GTA 5 stream is four to eight hours of 16:9 gameplay with a webcam box in one corner. OpenShorts reads the whole VOD, picks the moments worth posting out of what was said, and reframes each one so the gameplay keeps its full width and the facecam is enlarged underneath it instead of cropped away.',
     'Length is what makes this expensive everywhere else. Tools in this category bill one credit per minute of source you import, so a single eight-hour stream is 480 minutes: more than the 300 minutes a $29/month Opus Clip Pro plan includes (checked 2026-07-27). Self-hosted OpenShorts has no meter at all; the hosted edition starts at $12/month.',
-    'Gameplay with no commentary is handled too, and it is where most clippers stop: when a stream has no usable speech OpenShorts switches by itself to a vision pass where Gemini watches the footage and picks the moments, instead of failing on an empty transcript. The switch is automatic, and long silent captures are watched in stretches rather than rejected.',
+    'Gameplay with no commentary is handled too, and it is where most clippers stop: with an audio track but little speech, any stretch of 30 seconds or more at 5 words a minute or fewer becomes its own set of non-speech windows, ranked by audio energy (plus the "most replayed" heat for YouTube links only) and cut around the loudest moment, with the title and caption written from text alone. Only a video with no audio track, or one with no signal at all in its quiet stretches, goes down a vision pass where Gemini watches the footage (this needs a Gemini key), instead of failing on an empty transcript. The switch is automatic, and long silent captures are watched in stretches rather than rejected.',
   ],
   body: `
 <h2>Why GTA clips break a normal auto-clipper</h2>
@@ -2712,11 +2712,15 @@ what it is good at, and reading words rather than frames is why an eight-hour
 source costs about the same to analyse as an eight-minute one. A silent grind
 has no transcript to read, so OpenShorts does not use one.</p>
 <p>It switches paths on its own, and it does not need to be told to. Footage
-with no audio track at all, and footage whose transcript comes back under 8
-words or under 5 words per minute (music-only streams, a mic that was muted the
-whole session), both trip the same branch: the video itself goes to Gemini,
-which watches it and returns the same 3 to 15 moments in the same 15 to 60
-second band as the transcript path. Everything downstream is identical, layouts
+with an audio track but little speech (music-only streams, a mic that was
+muted for part of the session) is judged stretch by stretch: any stretch of 30
+seconds or more at 5 words per minute or fewer becomes non-speech windows, ranked
+by audio energy, plus the "most replayed" heat for YouTube links only, and cut
+around the loudest moment in the same 15 to 60 second band, with no model
+watching anything (a model only writes the title from text). Footage with no
+audio track at all, or under 8 words (or under 5 words per minute) overall with
+no audio or heat signal to rank, goes to Gemini instead, which watches the video
+(it needs a Gemini key) and returns 3 to 15 moments. Everything downstream is identical, layouts
 and inset detection included. The one difference is that the clips come out
 without captions, which is correct rather than a bug: there is no speech to
 caption.</p>
@@ -2761,7 +2765,7 @@ ${faqBlock([
   },
   {
     q: 'Does it work on gameplay with no commentary?',
-    a: 'Yes, and it switches by itself. Footage with no audio track, or whose transcript comes back under 8 words or under 5 words per minute, goes down a vision pass instead: Gemini watches the footage and returns the same 3 to 15 moments, with the same layouts and inset detection after it. The clips come out without captions, since there is no speech to caption. A long silent capture is watched in stretches of up to 40 minutes, up to a little over five hours per job; giving it only the session you care about costs fewer minutes.',
+    a: 'Yes, and it switches by itself. With an audio track but little speech, any stretch of 30 seconds or more at 5 words a minute or fewer becomes its own set of non-speech windows, ranked by audio energy (plus the "most replayed" heat for YouTube links only) and cut around the loudest moment, with the title and caption written from text alone. Footage with no audio track goes down a vision pass instead (it needs a Gemini key), and so does footage under 8 words in total or under 5 words per minute with no signal to rank: Gemini watches the footage and returns 3 to 15 moments, with the same layouts and inset detection after it. The clips come out without captions, since there is no speech to caption. A long silent capture is watched in stretches of up to 40 minutes, up to a little over five hours per job; giving it only the session you care about costs fewer minutes.',
   },
   {
     q: 'Is it free for streamers?',
@@ -2793,7 +2797,7 @@ ${trademarkNote('Grand Theft Auto, GTA, Rockstar Games and Twitch', 'Rockstar Ga
     },
     {
       q: 'Does it work on gameplay with no commentary?',
-      a: 'Yes. When a video has no audio track, or under 8 words of speech, OpenShorts switches automatically to a vision pass where Gemini watches the footage and picks the same 3 to 15 moments. Those clips have no captions, because there is no speech to caption.',
+      a: 'Yes. With an audio track but little speech, any stretch of 30 seconds or more at 5 words a minute or fewer becomes its own set of non-speech windows, ranked by audio energy (plus the "most replayed" heat for YouTube links only) and cut around the loudest moment, with the title and caption written from text alone. With no audio track (or under 8 words and no signal) it switches to a vision pass where Gemini watches the footage, which needs a Gemini key, and picks 3 to 15 moments. Clips from a stretch where nobody speaks have no captions.',
     },
   ],
   /* HowTo is emitted alongside the Article because the primary query here is a
@@ -3046,12 +3050,13 @@ overlays and long streams in more detail.</p>`,
 from GTA 5 streams, where the clips that travel are the same kinds of moment. The
 picker has no game-specific rules: it ranks every stretch of the transcript for
 how well it would play to someone who was not there, and with no speech it
-watches the footage instead. Story moments are the exception to keep out: see
+ranks the quiet stretches by audio energy, or watches the footage when there is
+no audio at all. Story moments are the exception to keep out: see
 the spoiler rule below.</p>`,
   },
   {
     q: 'Does it work with no commentary?',
-    a: 'Yes. When the footage has no audio track, or its transcript comes back under 8 words in total or under 5 words a minute, OpenShorts switches by itself to a vision pass where Gemini watches the footage and picks the moments. Those clips have no captions, because there is no speech to caption. Layouts work the same.',
+    a: 'Yes. With an audio track but little speech, any stretch of 30 seconds or more at 5 words a minute or fewer becomes its own set of non-speech windows, ranked by audio energy (plus the "most replayed" heat for YouTube links only) and cut around the loudest moment, with the title and caption written from text alone. With no audio track, or under 8 words in total (or 5 words a minute) and no signal to rank, it switches to a vision pass where Gemini watches the footage (a Gemini key is needed) and picks 3 to 15 moments. Clips from a stretch where nobody speaks have no captions. Layouts work the same.',
     detail: `<p>Long silent footage is watched in stretches of up to 40 minutes, and the
 picks from every stretch are ranked together into one list. A job watches up to
 eight stretches, a little over five hours; past that only the first five hours
@@ -3244,7 +3249,7 @@ ${gameLayoutDiagram('The two layouts, drawn to scale on a 1080 x 1920 frame. Wit
   },
   {
     q: 'How do I clip a Hardcore death?',
-    a: 'Record with a replay buffer so the death is saved after it happens and upload the file, or paste the VOD and use "clip only part of it" around the death. A death is short and often silent, so the model watches the footage when nobody speaks. Forever\'s Hardcore ruleset is not live yet; Blizzard says it comes after launch.',
+    a: 'Record with a replay buffer so the death is saved after it happens and upload the file, or paste the VOD and use "clip only part of it" around the death. A death is short and often silent, so a stretch where nobody speaks is ranked by its audio peaks, and the model watches the footage only when there is no audio. Forever\'s Hardcore ruleset is not live yet; Blizzard says it comes after launch.',
     detail: `<p>Blizzard's launch post says the Hardcore ruleset becomes available
 sometime after launch, and Blizzard developers have said by winter (PC Gamer;
 warcraft.wiki.gg lists winter 2026/2027), checked ${WOW_CHECKED}. Until then
@@ -3274,7 +3279,7 @@ Instagram raised Reels to 3 minutes in January 2025.</p>`,
   },
   {
     q: 'Does it work without commentary?',
-    a: 'Yes. When the recording has no audio track, or its transcript comes back under 8 words in total or under 5 words a minute, OpenShorts switches by itself to a vision pass where Gemini watches the footage and picks the moments. Those clips have no captions, because there is no speech to caption. Layouts work the same.',
+    a: 'Yes. With an audio track but little speech, any stretch of 30 seconds or more at 5 words a minute or fewer becomes its own set of non-speech windows, ranked by audio energy (plus the "most replayed" heat for YouTube links only) and cut around the loudest moment, with the title and caption written from text alone. With no audio track, or under 8 words in total (or 5 words a minute) and no signal to rank, it switches to a vision pass where Gemini watches the footage (a Gemini key is needed) and picks 3 to 15 moments. Clips from a stretch where nobody speaks have no captions. Layouts work the same.',
     detail: `<p>Long silent footage is watched in stretches of up to 40 minutes, and the
 picks from every stretch are ranked together. A job watches up to eight
 stretches, a little over five hours; past that only the first five hours are

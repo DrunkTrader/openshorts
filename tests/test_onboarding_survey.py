@@ -47,6 +47,6 @@ class TestValidation:
 class TestUiMatchesServer:
     @pytest.mark.parametrize("values", [onboarding.SOURCES, onboarding.GOALS, onboarding.ROLES])
     def test_every_accepted_value_is_offered(self, values):
-        ui = open(os.path.join(REPO, "dashboard/src/components/OnboardingSurvey.jsx")).read()
+        ui = open(os.path.join(REPO, "dashboard/src/components/OnboardingSurvey.jsx"), encoding="utf-8").read()
         for value in values:
             assert f"'{value}'" in ui, f"{value} is accepted but never offered"

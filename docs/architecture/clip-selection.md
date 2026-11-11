@@ -24,14 +24,64 @@ Two invariants keep that chain from leaking:
 `target_clips` on `/api/process` (dashboard: advanced options) pins both ends via
 `CLIP_TARGET_MIN` / `CLIP_TARGET_MAX` when the user wants an exact number.
 
-## Silent footage: the vision fallback (`main.get_visual_clips`)
+## Silent and mixed footage (`silent_signals.py`, `silent_copy.py`, `main.select_clips`)
 
-`transcribe_video` raising `NoAudioError`, **or** `speech_is_sparse()` returning
-true, both set `transcript = None` and route to `get_visual_clips`. Sparse means
-under `MIN_SPEECH_WORDS` (8) in total or under `MIN_SPEECH_WORDS_PER_MIN` (5).
-Music-only footage and mic-muted recordings transcribe to a handful of stray
-words; without the second test the picker scores those words and cuts around
-them.
+Speech is judged per 30 s stretch, not per video (`clip_selection.speech_density`,
+`silent_stretches`: runs of at least 30 s at or under 5 words/min; words count at
+their own timestamps, because Whisper stretches a segment across a pause).
+`build_timeline_windows` returns the speech windows (built per island of speech
+between the stretches, so none spans one; for a source with no stretch it is
+exactly `build_transcript_windows`) plus `kind="nonspeech"` windows
+(`window_ns_001`, at most the window size, no `text`) over each silent stretch.
+Whisper already ran with the bundled VAD (`vad_filter` was on); this adds the
+`WHISPER_VAD=0` switch and `WHISPER_VAD_MIN_SILENCE_MS`. Transcripts of normal
+speech are unchanged.
+
+- Non-speech windows never reach the LLM. `silent_signals.score_nonspeech` ranks
+  them in code: percentile within the group of `0.6 * heat_pct + 0.4 * energy_pct`
+  (`SILENT_HEAT_WEIGHT` / `SILENT_ENERGY_WEIGHT`), heat from the replay heatmap,
+  energy from `active_speaker.audio_envelope` at 1 s. A window with neither signal
+  is skipped: no random clips.
+- One ranking: speech windows keep their LLM score (and the heat blend), each
+  group becomes a within-group percentile (`1 - (i + .5) / len`) and the shortlist
+  is the global top N over both (`merge_rankings`). A rank-only percentile starves
+  a small group (a lone silent stretch is always 0.5), so a group with a window
+  above its own bar is reserved `max(1, round(N * its share of all windows))`
+  slots, taken from the windows that pass; the rest go by global percentile and
+  the reserved slots never exceed N. Bars: a speech window needs an LLM score of
+  at least `SILENT_SPEECH_MIN_SCORE` (50); a non-speech window needs a loudest
+  second at or above the `SILENT_BAR_PERCENTILE` (90) of the job's WHOLE energy
+  curve (not of the silent windows), or a replay heat of 0.5. A group with nothing
+  above its bar gets no reserved slot. This is not a per-batch K: the ranking is
+  still one list over every window, the shortlist is N whenever N windows exist,
+  and the reservation is a floor of representation for a group with evidence, not
+  a cap on anyone. The `min_clips` floor stays in code.
+- Every window gets a `rank_score` (0-1) from the merged order and every clip
+  carries its window's. `dedupe_overlapping` and `trim_to_best` compare clips on
+  `(rank_score, predicted_score)`, so a speech clip (LLM 70-95) and a silent clip
+  (code-made) are compared on the merged ranking; `predicted_score` is display
+  only. A clip with an unknown window id is held to the nearest window.
+- A non-speech clip is cut in code (`cut_from_peak`): 4 s before the loudest
+  second, ending 1.5 s after the energy first drops under 35% of the peak, in the
+  clip band and inside the window. It then goes through the same bound, snap,
+  dedupe and `min_clips` floor as every clip; under the floor, the next-ranked
+  non-speech windows are cut in code (no call).
+- Copy is text only, one call for every silent clip of the job
+  (`SILENT_COPY_PROMPT_TEMPLATE`: video title, chapter at that time, up to 300
+  characters spoken within the 120 s before the clip (none if there are none),
+  length). No frame or video, so a local LLM serves it; a failed
+  call leaves generic copy (chapter or title plus the timestamp, never a bare
+  "Highlight") and keeps the clip. The early-audio path passes the title and
+  chapters too; replay heat is range jobs only.
+- Cut density from scene detection is not a signal: with audio-first there is no
+  video at selection time. Windows carry `cut_density: None`.
+- Fully silent jobs store the transcript as `{"language": "none", "segments": []}`.
+- Vision is the last resort: `select_clips` calls `get_visual_clips` only when no
+  window survives AND the speech is sparse (or there is no audio track), it needs
+  `GEMINI_API_KEY` and a full video (range jobs do a logged full download). Without
+  a key the job fails saying a text-only server cannot see the footage.
+
+## Silent footage: the vision fallback (`main.get_visual_clips`)
 
 The vision pass uploads the video, Gemini returns the same `{"shorts"}` shape
 (`gemini_worker.VisualResponse`) in the same 15-60 s band, so every later stage
@@ -72,3 +122,27 @@ silently). Self-host `/api/process` then accepts a request without
 `X-Gemini-Key` and `/api/config.localLlm` tells the dashboard not to demand one.
 Frame-based stages (`layout_picker`, `screencast_layout`, `get_visual_clips`)
 stay on Gemini. Never wired in cloud mode: `BILLING_ENABLED` ignores it.
+
+## Range jobs: pieces instead of a source (`source_ranges.py`, `range_ingest.py`)
+
+Self-host URL jobs pick moments from the audio transcript alone, then download
+`[start - pad, end + pad]` pieces (`RANGE_PAD_SECONDS`, default 10; ranges closer
+than `RANGE_MERGE_GAP`, default 8 s, merge). `RANGE_MAX_TOTAL_SECONDS` (default
+1800) caps the total: the lowest-scored clips go first, but never below the
+clip-count floor (`clip_count_targets`); past it the log says the floor won.
+A clip starting at or after the audio's end is dropped, one ending past it is
+clamped. A clip whose piece failed twice is dropped (logged), and the job fails
+only when none is left. Sparse speech (the vision fallback needs frames) takes
+the legacy full download. Clip dicts keep absolute source time; each cut is
+`cut_clip(piece, start - piece_start, end - piece_start)`. Metadata carries
+`source_pieces` (file, start, end), `source_url` and `source_duration`;
+recut, re-frame, scenes and the editor monitor resolve the piece that holds the
+segments (`app._locate_source_for_range`) and answer 409 when none does. The
+layout picker and burned-subtitle probe do not run on range jobs yet.
+
+## Replay heat and straddling windows
+
+- YouTube's "Most replayed" heatmap arrives with the one yt-dlp extraction (range jobs only, YouTube extractor only; never fetched on its own). `heatmap_signals` time-weights it per window; the windows carry `replay_heat`/`replay_peak` in the scoring prompt, and the shortlist order blends `score/100 + w*(heat_pct - 0.5)` into windows that have heat (windows without keep their pure score) only when at least half the windows have heat. `REPLAY_HEAT_WEIGHT` (default 0.3, 0 disables). Heat is evidence, never the only rank.
+- Before the detail pass, consecutive shortlisted windows are merged (`clip_selection.merge_adjacent`, text rebuilt from segments so the 30 s overlap counts once, first id kept as `source_window_id`, run capped at twice the window size) and each gets `context_before`/`context_after` (`DETAIL_NEIGHBOUR_CHARS`, default 600 per side) with the seconds they open (`search_start`/`search_end`). A clip may use that context but must start and end inside those bounds. A local LLM gets the detail list in batches of at most `DETAIL_BATCH_CHARS` of text (default 9000, 0 = one call). `build_transcript_windows` is unchanged.
+- Merging and neighbour context apply to every backend, Gemini included; only `detail_batches` is local-LLM only. Each batch is asked for its share of the clip band (the global floor stays in code). The char budget is calibrated on Latin text (~3.5 chars/token); CJK runs about twice the tokens, so lower `DETAIL_BATCH_CHARS` there.
+- Clips leave the detail pass through `clip_selection.bound_clips` (drop end <= start, clamp to [0, duration] and the source window's `search_start`/`search_end`, drop under the minimum, trim over the maximum keeping the start), then the word snap and `dedupe_overlapping`. The `min_clips` floor is judged after dedupe and reuses the same retry over windows that kept no clip; a merged window counts as used when the model echoes any member id.

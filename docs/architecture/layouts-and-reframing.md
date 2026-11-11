@@ -181,3 +181,39 @@ width, so an explicit GENERAL override on a portrait clip cannot shrink it.
 
 - `SmoothedCameraman`: stabilized camera movement with safe-zone logic (prevents jitter).
 - `SpeakerTracker`: prevents rapid speaker switching, handles temporary occlusions.
+
+## Slot split (clip-level)
+
+`slot_split.py` renders a top/bottom stack where each half is the clip itself
+(`source`) or an uploaded video (`upload`), 50/50 or 60/40, from the dashboard's
+"split with clip" panel in the reframe editor. It is separate from the
+per-scene SPLIT layout (two faces of one source) and from `/api/clip/reframe`.
+Not exposed to MCP or the agent API.
+
+- **Endpoints.** `POST/GET/DELETE /api/slot-uploads` manage a per-owner library
+  (`uploads/slot_library/<owner>/` with a JSON index, no table; thumbnails under
+  `output/thumbnails/slot_<owner>/` with an `.owner` marker so `_authorize_media`
+  applies). Validation is by content (container magic bytes, then ffprobe needs a
+  video stream), never the extension or client MIME; size is capped by
+  `SLOT_UPLOAD_MAX_MB` (500), duration by `SLOT_UPLOAD_MAX_SECONDS` (600).
+  `POST /api/clip/split` takes `{job_id, clip_index, slots}` and uses the same
+  guards, per-job `_rerender_locks` and metering as the reframe endpoint. Account
+  erasure removes both library directories (`_purge_local_jobs_for_user`).
+- **Render.** The source cut feeds ffmpeg input 0; each upload is an extra
+  `-stream_loop -1 -ss <offset>` input, cover-scaled and cropped at `fit`. A
+  source slot is framed on a clip-level static face centre (median of sampled
+  frames). Only crop/scale/pad/vstack/setsar are used, but an extra-input graph
+  references `[1:v]`, which `gpu_render.layers_from_graph` rejects, so these
+  renders always take the ffmpeg path (tested). Two source slots at 50/50 equal
+  `split_layout.split_filtergraph`.
+- **Audio.** `source` (default), `upload`, or `mix` (`amix`, clip length). Two
+  uploads with `audio: source` play the first upload's audio.
+- **Captions.** The sidecar holds one `split` range for the whole clip with a
+  `seam` fraction (0.6 for 60/40). `generate_ass` pins each word event with
+  `{\an5\pos(...)}` at that height (explicit `PlayResX`, 9:16 only); at 0.5 it is
+  the plain `{\an5}`. `layout_ranges` keeps `seam` through `normalise` and
+  `remap`, so restyles and recuts keep captions on the seam. The auto-placed hook
+  still assumes a mid-frame seam.
+- **Persistence and watermark.** `recipe.split_slots` and `layout_ranges` are
+  saved in `metadata.json`. Canonical files stay clean; the free plan is served
+  the `wm_` copy via `_deliver`. Vertical (9:16) jobs only.

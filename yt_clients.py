@@ -27,6 +27,21 @@ import tempfile
 HD_CLIENTS = ["default", "mweb"]
 
 
+def js_runtimes() -> dict:
+    """The JavaScript runtime yt-dlp solves YouTube's n challenge with.
+
+    The yt-dlp Python API enables only ``deno`` and ignores the user's
+    ``--js-runtimes`` config (the CLI reads it, the API does not). A native
+    install with node but no deno then fails with "n challenge solving failed /
+    No video formats found": enable what is on PATH, deno first. The Docker
+    image ships deno, so this changes nothing there."""
+    import shutil
+    for name in ("deno", "node", "bun"):
+        if shutil.which(name):
+            return {name: {}}
+    return {}
+
+
 def cookies_path() -> str:
     """Where YOUTUBE_COOKIES is written and read back: COOKIES_FILE, else the
     image's /app when writable, else the temp dir (native Linux non-root, Windows)."""

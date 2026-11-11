@@ -30,7 +30,11 @@ import hook_grounding
 import layout_picker
 import llm_backend
 import twitch_signals
-from clip_selection import (build_transcript_windows, clip_count_targets,
+import heatmap_signals
+import silent_copy
+import silent_signals
+from clip_selection import (build_timeline_windows, silent_stretches, build_transcript_windows, build_window_payload,
+                            bound_clips, detail_batches, merge_adjacent, neighbour_context, clip_count_targets,
                             clip_duration_bounds, dedupe_overlapping,
                             score_batches, shortlist_target,
                             snap_clip_to_words, trim_to_best,
@@ -754,6 +758,17 @@ def _file_stamp(path):
         return None
 
 
+def probe_media_duration(path):
+    """Seconds in ``path`` per ffprobe, or 0.0 when it cannot be read."""
+    try:
+        out = subprocess.check_output(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nw=1:nk=1", path], timeout=60)
+        return float(out.decode().strip())
+    except Exception:
+        return 0.0
+
+
 def cap_source_duration(input_video, max_minutes, safety=False, start_seconds=0.0):
     """Cut ``input_video`` down to its first ``max_minutes`` minutes, in place.
 
@@ -862,24 +877,69 @@ def _content_block(error_text):
     return None
 
 
+class NoAudioFormat(Exception):
+    """The source lists formats but no audio-only stream: no route can fix it."""
+
+
+# The audio track alone: the early-audio thread and the audio-first ingest.
+AUDIO_FORMAT = 'bestaudio[ext=m4a]/bestaudio'
+
+
+def use_range_download(args, env, billing):
+    """True when a URL job fetches audio first and only the chosen ranges of
+    video after (self-host YouTube). Cloud keeps the full download (metering,
+    source caps and the resume manifest all assume one source file)."""
+    url = getattr(args, "url", None)
+    return bool(url and is_youtube_url(url) and not billing
+                and env.get("RANGE_DOWNLOAD", "1").strip() != "0"
+                and not args.skip_analysis and not args.transcript
+                and not env.get("MAX_SOURCE_MINUTES", "").strip()
+                and not env.get("SOURCE_CAP_MINUTES", "").strip())
+
+
 def download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
-                           cap_minutes=None, route_out=None):
+                           cap_minutes=None, route_out=None, audio_only=False,
+                           meta_out=None, ranges=None):
     """Download ``url`` with only public addresses resolvable (ssrf_guard): the
     checked URL is not the only one yt-dlp talks to (redirects, URLs read out
     of an extracted page, a DNS answer that changes after the check)."""
     import ssrf_guard
     with ssrf_guard.guarded():
         return _download_youtube_video(url, output_dir, on_audio=on_audio, allow_paid=allow_paid,
-                                       cap_minutes=cap_minutes, route_out=route_out)
+                                       cap_minutes=cap_minutes, route_out=route_out,
+                                       audio_only=audio_only, meta_out=meta_out, ranges=ranges)
+
+
+def _write_cookies_file(cookies_path):
+    """Write YOUTUBE_COOKIES to ``cookies_path`` (utf-8, owner-only) and return
+    the path, or None when unset or unwritable."""
+    cookies_env = os.environ.get("YOUTUBE_COOKIES")
+    if not cookies_env:
+        print("⚠️ YOUTUBE_COOKIES env var not found.")
+        return None
+    print("🍪 Found YOUTUBE_COOKIES env var, creating cookies file...")
+    try:
+        fd = os.open(cookies_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write(cookies_env)
+        os.chmod(cookies_path, 0o600)  # the file may have existed with looser bits
+        # Never print file CONTENT here: with a headerless cookies
+        # blob this would leak live YouTube session cookies to logs.
+        print(f"   Debug: Cookies file created. Size: {os.path.getsize(cookies_path)} bytes")
+        return cookies_path
+    except Exception as e:
+        print(f"⚠️ Failed to write cookies file: {e}")
+        return None
 
 
 def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
-                            cap_minutes=None, route_out=None):
+                            cap_minutes=None, route_out=None, audio_only=False,
+                            meta_out=None, ranges=None):
     """
     Downloads a YouTube video using yt-dlp.
     Returns the path to the downloaded video and the video title.
 
-    ``on_audio(path, duration)``: when given, the audio track is also fetched
+    ``on_audio(path, duration, meta)`` (meta: title, chapters): when given, the audio track is also fetched
     on its own, in parallel, and handed over as soon as it lands, so the
     caller can transcribe while the (much larger) video is still coming. It is
     the same audio format the merged mp4 gets. Never on the per-GB proxy.
@@ -889,6 +949,21 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     budget hit), ``cap_minutes`` bounds the fetch like ``SOURCE_CAP_MINUTES``,
     and ``route_out`` (a dict) receives the route summary so the caller can
     record paid bytes in the proxy ledger.
+
+    ``audio_only``: fetch just the audio track (same attempt ladder, same
+    routes) and return ``(audio_path, title)``. Audio is REQUIRED here, so it
+    may take the paid route when direct and static fail, like a video would.
+    ``meta_out`` (a dict) receives what the single extraction saw: duration,
+    title, heatmap, chapters, extractor, id.
+
+    ``ranges`` (a list of ``(start, end)`` seconds): fetch only those pieces,
+    in one session, each re-encoded from its requested start
+    (``force_keyframes_at_cuts``), and return ``(paths, title)`` with one path
+    per range (None for a piece that failed twice). Same attempt ladder and
+    1080p/720p format rule as a whole download. ffmpeg fetches ranged streams
+    at roughly 1-2.5x realtime, so the caller merges close ranges and caps the
+    total (source_ranges); that is what keeps this far below a full download.
+    Pieces already on disk for the same range are reused (a resumed job).
     """
     # SSRF guard: block non-http(s) schemes and private/loopback/metadata hosts
     # before handing the URL to yt-dlp.
@@ -910,22 +985,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
 
     from yt_clients import cookies_path as _cookies_path
     cookies_path = _cookies_path()
-    cookies_env = os.environ.get("YOUTUBE_COOKIES")
-    if cookies_env:
-        print("🍪 Found YOUTUBE_COOKIES env var, creating cookies file inside container...")
-        try:
-            with open(cookies_path, 'w') as f:
-                f.write(cookies_env)
-            if os.path.exists(cookies_path):
-                 # Never print file CONTENT here: with a headerless cookies
-                 # blob this would leak live YouTube session cookies to logs.
-                 print(f"   Debug: Cookies file created. Size: {os.path.getsize(cookies_path)} bytes")
-        except Exception as e:
-            print(f"⚠️ Failed to write cookies file: {e}")
-            cookies_path = None
-    else:
-        cookies_path = None
-        print("⚠️ YOUTUBE_COOKIES env var not found.")
+    cookies_path = _write_cookies_file(cookies_path)
     
     # Optional HTTP proxy. Set PROXY_URL to route downloads through it; unset
     # (self-host) goes direct as before.
@@ -957,6 +1017,8 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     # "Video unavailable" on a share of videos, from every IP, and that was
     # what fed the per-GB proxy (6-sep-2026, verified in the prod container).
     from yt_clients import hd_extractor_args, fallback_extractor_args
+    from yt_clients import js_runtimes
+    _js = js_runtimes()
     hd_args = hd_extractor_args(_bgutil_http, _bgutil_script)
     fallback_args = fallback_extractor_args(_bgutil_http, _bgutil_script)
 
@@ -989,6 +1051,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             # playlist's), paying for all of them and keeping the last.
             'noplaylist': True,
             'extractor_args': extractor_args,
+            **({'js_runtimes': _js} if _js else {}),
             'http_headers': {
                 'User-Agent': (
                     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -1013,6 +1076,9 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                                       or d.get('downloaded_bytes') or 0)
 
     _early = {"started": False}
+    if audio_only or ranges is not None:
+        on_audio = None  # the audio IS the download / the video is not whole
+    _out = {"path": None, "pieces": None}
 
     # A job only paid for so many minutes (MAX_SOURCE_MINUTES: the quota-wall
     # offer; SOURCE_CAP_MINUTES: every metered job, a safety cap). yt-dlp used
@@ -1045,7 +1111,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             opts = {
                 **_base_opts(extractor_args, proxy, cookies),
                 'quiet': True, 'verbose': False, 'noprogress': True,
-                'format': 'bestaudio[ext=m4a]/bestaudio',
+                'format': AUDIO_FORMAT,
                 'outtmpl': os.path.join(output_dir, '.early_audio.%(ext)s'),
                 'overwrites': True,
             }
@@ -1057,10 +1123,57 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                     or res.get('filepath'))
             if path and os.path.exists(path):
                 print(f"🎧 Audio ready ahead of the video: {os.path.basename(path)}")
-                on_audio(path, info.get('duration'))
+                on_audio(path, info.get('duration'),
+                         {"title": info.get('title'), "chapters": info.get('chapters')})
         except Exception as e:
             print(f"   ℹ️ Early audio skipped ({type(e).__name__}: {e}) — "
                   f"transcribing once the video is in.")
+
+    def _attempt_ranges(info, dl_opts, sanitized):
+        """One ranged session over the pieces still missing, then one more
+        for what failed, after a pause (politeness on bot checks). Raises when
+        no piece exists at all, so the ladder moves to the next route."""
+        import copy
+        import random
+        from source_ranges import piece_path, pending_pieces, record_pieces
+
+        def _sections(inf, ydl, todo):
+            for n in todo:
+                yield {'start_time': ranges[n][0], 'end_time': ranges[n][1], 'index': n + 1}
+
+        dl_opts.update(
+            # Without a keyframe at the cut the piece starts up to a GOP early
+            # and every offset after it is wrong.
+            force_keyframes_at_cuts=True,
+            # A piece that fails is retried below; the others still land.
+            ignoreerrors='only_download',
+            outtmpl=os.path.join(output_dir, f'{sanitized}.piece_%(section_number)s.%(ext)s'))
+        fetched_here = set(pending_pieces(output_dir, sanitized, ranges))  # not from an earlier route or run
+        for rnd in range(2):
+            todo = pending_pieces(output_dir, sanitized, ranges)
+            if not todo:
+                break
+            if rnd:
+                pause = random.uniform(5, 15)
+                print(f"⏳ {len(todo)} piece(s) missing: retrying them in {pause:.0f}s.")
+                time.sleep(pause)
+            dl_opts['download_ranges'] = lambda inf, ydl, todo=todo: _sections(inf, ydl, todo)
+            with yt_dlp.YoutubeDL(dl_opts) as ydl:
+                ydl.process_ie_result(copy.deepcopy(info), download=True)
+            record_pieces(output_dir, sanitized, ranges, [n for n in todo])
+        missing = pending_pieces(output_dir, sanitized, ranges)
+        # yt-dlp's ffmpeg downloader reports only the finished piece's file
+        # size (and nothing for a piece that failed midway): never let a paid
+        # route read 0. A lower bound of the wire bytes, since the piece is
+        # re-encoded.
+        _dl_bytes["total"] = max(_dl_bytes["total"], sum(
+            os.path.getsize(piece_path(output_dir, sanitized, n))
+            for n in fetched_here if n not in missing))
+        if len(missing) == len(ranges):
+            raise RuntimeError("no range could be downloaded")
+        _out["pieces"] = [None if n in missing else piece_path(output_dir, sanitized, n)
+                          for n in range(len(ranges))]
+        return sanitized
 
     def _attempt(extractor_args, fmt, proxy, cookies=True):
         _dl_bytes["total"] = 0
@@ -1070,6 +1183,14 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
         # clients, API JSON, m3u8), 4-9 s of round trips per attempt.
         with yt_dlp.YoutubeDL(_base_opts(extractor_args, proxy, cookies)) as ydl:
             info = ydl.extract_info(url, download=False, process=False)
+        if isinstance(meta_out, dict):
+            meta_out.update({k: info.get(k) for k in ('duration', 'title', 'heatmap', 'chapters', 'id')})
+            meta_out['extractor'] = info.get('extractor_key') or info.get('ie_key')
+        formats = info.get('formats') or []
+        if audio_only and formats and not any(
+                f.get('vcodec') == 'none' and f.get('acodec') not in (None, 'none')
+                for f in formats):
+            raise NoAudioFormat("the source has no audio-only stream")
         # Media URLs another program will fetch (ffmpeg on a ranged or HLS
         # download) resolve outside the Python guard: check them here. YouTube's
         # own CDN hosts are skipped (dozens of them, never internal).
@@ -1083,7 +1204,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
         # on a 19-min cap took 8 min ranged against ~30 s whole (prod,
         # 25-sep-2026); a finished 6.7 h livestream is ~13 GB whole.
         ranged = False
-        if _range_cap:
+        if _range_cap and not audio_only and ranges is None:
             _dur = info.get('duration')
             ranged = not _dur or float(_dur) > max(3 * _range_cap, _range_cap + 2700)
         # Once per download, and not on the per-GB proxy (that is paid bytes,
@@ -1095,7 +1216,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             threading.Thread(target=_early_audio, args=(info, extractor_args, proxy, cookies),
                              daemon=True).start()
         expected = os.path.join(output_dir, f'{sanitized}.mp4')
-        if os.path.exists(expected):
+        if os.path.exists(expected) and not audio_only and ranges is None:
             os.remove(expected)
         dl_opts = {
             **_base_opts(extractor_args, proxy, cookies),
@@ -1104,6 +1225,12 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
             'merge_output_format': 'mp4', 'overwrites': True,
             'progress_hooks': [_progress_hook],
         }
+        if ranges is not None:
+            return _attempt_ranges(info, dl_opts, sanitized)
+        if audio_only:
+            del dl_opts['merge_output_format']
+            dl_opts.update(format=AUDIO_FORMAT,
+                           outtmpl=os.path.join(output_dir, f'{sanitized}.audio.%(ext)s'))
         if ranged:
             from yt_dlp.utils import download_range_func
             dl_opts['download_ranges'] = download_range_func(None, [(0, _range_cap)])
@@ -1111,9 +1238,15 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                   f": downloading only the first {_range_cap / 60:.0f} min.")
         with yt_dlp.YoutubeDL(dl_opts) as ydl:
             if info.get('_type', 'video') == 'video' and info.get('formats'):
-                ydl.process_ie_result(info, download=True)
+                res = ydl.process_ie_result(info, download=True)
             else:
+                res = None
                 ydl.download([url])
+        if audio_only:
+            _out["path"] = ((((res or {}).get('requested_downloads') or [{}])[0]).get('filepath')
+                            or (res or {}).get('filepath'))
+            if not _out["path"] or not os.path.exists(_out["path"]):
+                raise RuntimeError("audio-only download produced no file")
         return sanitized
 
     # DIRECT_FIRST=1: try the server's own IP before spending proxy bandwidth.
@@ -1180,11 +1313,15 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                                     "paid": proxy is not None and proxy == _proxy,
                                     "error": str(e)[:300]})
                 print(f"⚠️  Download attempt '{label}' failed: {str(e)[:200]}")
+                if isinstance(e, NoAudioFormat):
+                    break
                 retryable = '403' in str(e) or 'Forbidden' in str(e)
                 if not retryable or retry == 1:
                     break
                 time.sleep(3)
         if sanitized_title is not None:
+            break
+        if isinstance(last_err, NoAudioFormat):
             break
         # The video itself is off limits: another route (or the paid proxy)
         # cannot change that, so stop instead of spending every attempt.
@@ -1195,6 +1332,9 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
         # A failed download still paid for its proxied attempts.
         route_out.update({"winner": None, "attempts": attempt_log, "paid_bytes": sum(
             int(a.get("bytes") or 0) for a in attempt_log if a.get("paid"))})
+
+    if sanitized_title is None and isinstance(last_err, NoAudioFormat):
+        raise last_err
 
     if sanitized_title is None and last_err is not None and _content_block(str(last_err)):
         print(f"❌ {_content_block(str(last_err))}")
@@ -1239,6 +1379,13 @@ Technical Details: {str(last_err)}
         # Machine-parseable marker consumed by app.py's log reader for the
         # monthly proxy-bandwidth counter. Not shown to clients (log filter).
         print(f"PROXY_BYTES={paid_bytes}")
+    if ranges is not None:
+        print(f"✅ {sum(p is not None for p in _out['pieces'])}/{len(ranges)} pieces downloaded "
+              f"in {time.time() - step_start_time:.2f}s.")
+        return _out["pieces"], sanitized_title
+    if audio_only:
+        print(f"✅ Audio downloaded in {time.time() - step_start_time:.2f}s: {_out['path']}")
+        return _out["path"], sanitized_title
     print(f"✅ Video downloaded in {time.time() - step_start_time:.2f}s: {downloaded_file}")
     return downloaded_file, sanitized_title
 
@@ -2059,7 +2206,8 @@ def score_batch_size():
     return 3 if llm_backend.active() else 8
 
 
-def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
+def get_viral_clips(transcript_result, video_duration, viewer_clips=None, replay_heat=None,
+                    silent=None):
     """Two-pass clip selection: score transcript windows, then detail the best.
 
     Windowing gives even coverage on long videos (a single call over the whole
@@ -2070,6 +2218,16 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
     ``viewer_clips`` (``twitch_signals.viewer_clips_for_job``): stretches the
     stream's own viewers clipped. They are shown to both passes on the windows
     that hold them, and the hottest windows are guaranteed a shortlist slot.
+
+    ``replay_heat`` (YouTube's "Most replayed" heatmap from the one
+    extraction): shown on the windows it covers and, with enough coverage,
+    blended into the shortlist order (``heatmap_signals``). Never the only rank.
+
+    ``silent`` (``{"audio": path, "title", "chapters"}``) opens the timeline to
+    stretches without speech: they become windows scored in code from the heat
+    and the audio energy (``silent_signals``), ranked with the speech windows in
+    one global top N, cut around their peak, and their copy comes from one
+    text-only call. Without it only speech windows exist, as before.
     """
     language = str(transcript_result.get('language') or 'unknown')
     if llm_backend.active():
@@ -2100,9 +2258,28 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
         # the requested band — a user asking for 60-90s clips on the default
         # 90s windows would get clips squeezed against the window walls.
         min_secs, max_secs = clip_duration_bounds()
-        windows = build_transcript_windows(
-            transcript_result, video_duration,
-            window_seconds=max(90, int(max_secs * 1.5)))
+        window_seconds = max(90, int(max_secs * 1.5))
+        ns_ranked, curve = [], []
+        if silent is None:
+            windows = build_transcript_windows(
+                transcript_result, video_duration, window_seconds=window_seconds)
+        else:
+            signals = None
+            if silent_stretches(transcript_result, video_duration):
+                curve = (silent_signals.audio_energy_curve(silent["audio"], video_duration)
+                         if silent.get("audio") else [])
+                signals = {"heatmap": replay_heat, "energy": curve,
+                           "energy_step": silent_signals.ENERGY_STEP}
+            windows = build_timeline_windows(
+                transcript_result, video_duration, signals, window_seconds=window_seconds)
+            ns_ranked = silent_signals.score_nonspeech(
+                [w for w in windows if w.get("kind") == "nonspeech"])
+            windows = [w for w in windows if w.get("kind") != "nonspeech"]
+            if ns_ranked:
+                print(f"   {len(ns_ranked)} non-speech window(s) with a signal, scored in code.")
+            if not windows and not ns_ranked:
+                print("   No speech window and no non-speech window with a signal.")
+                return None
         print(f"   Built {len(windows)} scoring window(s).")
         costs = []
 
@@ -2122,17 +2299,12 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
         if heat:
             print(f"   👀 Viewer clips fall in {len(heat)} window(s).")
 
+        replay = heatmap_signals.window_replay(windows, replay_heat) if replay_heat else {}
+        if replay:
+            print(f"   🔥 Replay heatmap covers {len(replay)} of {len(windows)} window(s).")
+
         def _payload(ws):
-            out = []
-            for w in ws:
-                item = {"id": w["id"], "start": w["start"], "end": w["end"], "text": w["text"]}
-                h = heat.get(w["id"])
-                if h:
-                    item["viewers_clipped"] = h["clips"]
-                    item["viewer_clip_views"] = h["views"]
-                    item["viewer_moments"] = h["spans"][:5]
-                out.append(item)
-            return out
+            return build_window_payload(ws, heat, replay)
 
         def _score_prompt(ws):
             return gemini_worker.SCORE_PROMPT_TEMPLATE.format(
@@ -2146,22 +2318,43 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
 
         # Shortlist the top windows; scale with duration so long videos surface
         # more candidates without exploding the detail call.
-        scored.sort(key=lambda w: w.get("score", 0), reverse=True)
+        by_score = sorted(scored, key=lambda w: w.get("score", 0), reverse=True)
+        scored = heatmap_signals.rank_scored(scored, replay, len(windows))
+        if [w.get("id") for w in scored[:target]] != [w.get("id") for w in by_score[:target]]:
+            print(f"   🔥 Replay heat reordered the shortlist: "
+                  f"{[w.get('id') for w in by_score[:target]]} -> {[w.get('id') for w in scored[:target]]}")
         by_id = {w["id"]: w for w in windows}
         shortlist = [by_id[w["id"]] for w in scored[:target] if w.get("id") in by_id]
         if not shortlist:
             shortlist = windows[:target]  # scoring returned nothing usable
-        if heat:
+        ranked = [by_id[w["id"]] for w in scored if w.get("id") in by_id] or windows
+        ns_short, ns_spare = [], []
+        if ns_ranked:
+            # One global top N over both groups, by percentile within each:
+            # neither starves, and the shortlist is `target` whenever there are
+            # that many windows (never "up to K per group").
+            score_of = {w["id"]: w.get("score", 0) for w in scored}
+            floor_score = silent_signals.speech_min_score()
+            bar = silent_signals.energy_bar(curve)
+            merged = silent_signals.merge_rankings(
+                ranked, ns_ranked, target,
+                speech_ok=lambda w: score_of.get(w["id"], 0) >= floor_score,
+                silent_ok=lambda w: silent_signals.passes_bar(w, bar))
+            ns_short = [w for w in merged if w.get("kind") == "nonspeech"]
+            ns_spare = [w for w in ns_ranked if w not in ns_short]
+            shortlist = [w for w in merged if w.get("kind") != "nonspeech"]
+            target = len(shortlist)
+            print(f"   Shortlist: {target} speech + {len(ns_short)} non-speech window(s).")
+        if heat and shortlist:
             before = {w["id"] for w in shortlist}
-            ranked = [by_id[w["id"]] for w in scored if w.get("id") in by_id] or windows
             shortlist = twitch_signals.promote_hot_windows(shortlist, ranked, heat, target)
             added = [w["id"] for w in shortlist if w["id"] not in before]
             if added:
                 print(f"   👀 Promoted {len(added)} window(s) viewers clipped: {added}")
-        print(f"   Shortlisted {len(shortlist)} window(s) for detail.")
+        print(f"   Shortlisted {len(shortlist) + len(ns_short)} window(s) for detail.")
 
         # --- Pass 2: detailed clip extraction on the shortlist ---
-        min_clips, max_clips = clip_count_targets(len(shortlist))
+        min_clips, max_clips = clip_count_targets(len(shortlist) + len(ns_short))
 
         def _detail_prompt_for(lo, hi):
             # A split batch keeps the full clip-count band: a short list can
@@ -2174,31 +2367,102 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
                     windows_json=json.dumps(_payload(ws), ensure_ascii=False))
             return build
 
-        shorts = _run_stage_split(client, model_name, shortlist,
-                                  _detail_prompt_for(min_clips, max_clips),
-                                  gemini_worker.DetailResponse, "shorts", costs, "detail")
+        # Neighbouring shortlisted windows become one detail window, so a moment
+        # across their seam is whole. A small-context local model gets the list
+        # in size-bounded batches (the full clip band per batch, as a split does).
+        detail_items = merge_adjacent(shortlist, windows, transcript_result,
+                                      max_span=2 * window_seconds)
+        detail_items = neighbour_context(
+            detail_items, transcript_result,
+            max_chars=int(os.environ.get("DETAIL_NEIGHBOUR_CHARS", "600")))
+        if len(detail_items) < len(shortlist):
+            print(f"   Merged {len(shortlist)} shortlisted windows into {len(detail_items)} for detail.")
+        char_budget = int(os.environ.get("DETAIL_BATCH_CHARS", "9000"))
+
+        def _detail(items, lo, hi):
+            # DETAIL_BATCH_CHARS is calibrated on Latin text (~3.5 chars/token);
+            # CJK runs about twice the tokens per char, so lower it there.
+            batches = (detail_batches(items, char_budget)
+                       if llm_backend.active() and char_budget > 0 else [items])
+            out = []
+            for b in batches:
+                # Each batch is asked for its share of the band; the global
+                # floor is enforced below, in code.
+                share = len(b) / max(1, len(items))
+                blo = lo if len(batches) == 1 else max(1, round(lo * share))
+                bhi = hi if len(batches) == 1 else max(blo, math.ceil(hi * share))
+                out.extend(_run_stage_split(client, model_name, b, _detail_prompt_for(blo, bhi),
+                                            gemini_worker.DetailResponse, "shorts", costs, "detail"))
+            return out
+
+        def _finish(raw):
+            """Bound, snap and dedupe the model's clips. The floor is judged on
+            what survives this, not on what the model returned."""
+            kept, notes = bound_clips(raw, detail_items + ns_ranked, video_duration, min_secs, max_secs)
+            for note in notes:
+                print(f"   Bounds: {note}")
+            if ns_ranked:
+                # One scale across groups: dedupe and trim compare rank_score
+                # (the merged ranking), not the speech LLM score against a
+                # code-made one. predicted_score stays for display.
+                rank_by_id = {w["id"]: w["rank_score"] for w in windows + ns_ranked if "rank_score" in w}
+                kept = [{**c, "rank_score": rank_by_id[str(c.get("source_window_id"))]}
+                        if str(c.get("source_window_id")) in rank_by_id else c for c in kept]
+            snapped = []
+            for c in kept:
+                s = dict(c)
+                # Keep the model's raw proposal: it is how boundary accuracy is
+                # measured (distance to the nearest word before the snap; p90 was
+                # 0.4-0.5 s on 8 talks, 21-sep-2026, so the snap reaches it).
+                s["proposed"] = [s.get("start", 0), s.get("end", 0)]
+                s["start"], s["end"] = snap_clip_to_words(
+                    s["start"], s["end"], words, video_duration,
+                    min_duration=min_secs, max_duration=max_secs)
+                snapped.append(s)
+            deduped = dedupe_overlapping(snapped)
+            if len(deduped) < len(snapped):
+                print(f"   Dropped {len(snapped) - len(deduped)} clip(s) overlapping a "
+                      f"better-scored one.")
+            return deduped
+
+        def _cut(ws):
+            """Clips cut in code around the energy peak of non-speech windows."""
+            cuts = [silent_signals.cut_from_peak(w, curve, min_secs, max_secs) for w in ws]
+            return [c for c in cuts if c]
+
+        raw = _detail(detail_items, min_clips, max_clips) if detail_items else []
+        raw += _cut(ns_short)
+        shorts = _finish(raw)
 
         # The floor lived only in the prompt, and a prompt is not a contract:
         # the model regularly returned half of it and the job shipped that.
-        # The windows it passed over are the cheap second chance — they are
+        # The windows that kept no clip are the cheap second chance — they are
         # already the best-scoring ones in the video — so they get one more
         # call for the missing clips. It may still come back empty, which is
         # the honest answer for material that does not hold more.
         if len(shorts) < min_clips:
-            used = {str(s.get("source_window_id") or "") for s in shorts}
-            spare = [w for w in shortlist if w["id"] not in used]
+            owner = {i: w["id"] for w in detail_items for i in (w.get("ids") or [w["id"]])}
+            used = {owner.get(str(s.get("source_window_id") or "")) for s in shorts}
+            spare = [w for w in detail_items if w["id"] not in used]
             if spare:
                 missing = min_clips - len(shorts)
-                print(f"   Detail returned {len(shorts)} clip(s) of {min_clips}; "
+                print(f"   {len(shorts)} clip(s) survive of {min_clips}; "
                       f"asking the {len(spare)} unused window(s) for {missing} more.")
-                extra = _run_stage_split(
-                    client, model_name, spare,
-                    _detail_prompt_for(missing, max(missing, len(spare))),
-                    gemini_worker.DetailResponse, "shorts", costs, "detail-floor")
+                extra = _detail(spare, missing, max(missing, len(spare)))
                 if extra:
-                    shorts = sorted(shorts + extra,
+                    raw = raw + extra
+                    shorts = sorted(_finish(raw),
                                     key=lambda s: float(s.get("start") or 0))
-                    print(f"   Recovered {len(extra)} clip(s) from them.")
+                    print(f"   Recovered; {len(shorts)} clip(s) now.")
+            if len(shorts) < min_clips and ns_spare:
+                # Non-speech windows past the shortlist are cut in code, no call.
+                extra = _cut(ns_spare[:min_clips - len(shorts)])
+                if extra:
+                    raw = raw + extra
+                    shorts = sorted(_finish(raw), key=lambda s: float(s.get("start") or 0))
+                    print(f"   Added {len(extra)} non-speech clip(s) for the floor; {len(shorts)} clip(s) now.")
+            if len(shorts) < min_clips:
+                print(f"   Floor of {min_clips} not reached ({len(shorts)}): the material may not hold more.")
 
         if len(shorts) > max_clips:
             # By score, never by position: the results arrive in transcript
@@ -2208,20 +2472,14 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
             shorts = trim_to_best(shorts, max_clips)
             print(f"   Kept the {max_clips} best-scoring clip(s) of "
                   f"{max_clips + dropped}.")
-        # Snap each proposed clip onto real word boundaries (+ a bit of silence).
-        for s in shorts:
-            # Keep the model's raw proposal: it is how boundary accuracy is
-            # measured (distance to the nearest word before the snap; p90 was
-            # 0.4-0.5 s on 8 talks, 21-sep-2026, so the snap reaches it).
-            s["proposed"] = [s.get("start", 0), s.get("end", 0)]
-            ns, ne = snap_clip_to_words(s.get("start", 0), s.get("end", 0), words, video_duration,
-                                        min_duration=min_secs, max_duration=max_secs)
-            s["start"], s["end"] = ns, ne
-        deduped = dedupe_overlapping(shorts)
-        if len(deduped) < len(shorts):
-            print(f"   Dropped {len(shorts) - len(deduped)} clip(s) overlapping a "
-                  f"better-scored one.")
-            shorts = deduped
+
+        # Copy for the clips cut in code: text only, one call for all of them.
+        silent_clips = [s for s in shorts if s.get("kind") == "nonspeech"]
+        if silent_clips:
+            costs.extend(silent_copy.fill_silent_copy(
+                silent_clips, lambda p, sch: _run_gemini_stage(client, model_name, p, sch),
+                silent.get("title"), silent.get("chapters"), transcript_result,
+                language if language not in ("none", "unknown") else "the language of VIDEO_TITLE"))
 
         # Aggregate cost across both passes.
         cost_analysis = None
@@ -2268,6 +2526,46 @@ def speech_is_sparse(transcript, duration):
                 for seg in (transcript or {}).get("segments", []))
     minutes = max(float(duration or 0) / 60.0, 1e-6)
     return words < MIN_SPEECH_WORDS or words / minutes < MIN_SPEECH_WORDS_PER_MIN
+
+
+def silent_context(audio, meta=None):
+    """The ``silent`` argument of ``get_viral_clips``: the audio to measure and
+    what the one extraction knew of the video (title, chapters), when it knew."""
+    return {"audio": audio, **{k: v for k, v in (meta or {}).items() if v and k in ("title", "chapters")}}
+
+
+def select_clips(transcript, duration, video, viewer_clips=None, replay_heat=None,
+                 silent=None, fetch_full=None):
+    """Pick the clips of one job. Returns ``(clips_data, video, title, vision)``;
+    ``video``/``title`` are None unless ``fetch_full`` ran (range jobs).
+
+    The timeline is clipped from its speech and from its non-speech stretches
+    (``get_viral_clips`` with ``silent``). Only when that finds nothing AND the
+    speech is sparse (or there is no audio track at all) does the one stage that
+    watches the video, ``get_visual_clips``, take over: it needs a Gemini key
+    and a full video (``fetch_full``, a logged legacy download for range jobs).
+    """
+    if transcript is not None:
+        clips = get_viral_clips(transcript, duration, viewer_clips=viewer_clips,
+                                replay_heat=replay_heat, silent=silent)
+        if clips or not speech_is_sparse(transcript, duration):
+            return clips, None, None, False
+        print("🔇 Too little speech and no usable audio or heat signal in the silent stretches.")
+    if not os.getenv("GEMINI_API_KEY"):
+        if not llm_backend.active():
+            raise RuntimeError(
+                "Clip detection failed: no LLM is configured (set GEMINI_API_KEY, or LLM_BASE_URL "
+                "for a text-only server). Clips from footage without speech need one to write "
+                "their titles.")
+        raise RuntimeError(
+            "Clip detection failed: this footage has no speech to clip by and no audio or "
+            "replay-heat peaks to rank, so it can only be clipped by watching it, and that needs "
+            "a GEMINI_API_KEY (a text-only LLM server cannot see the footage).")
+    title = None
+    if fetch_full is not None:
+        print("↩️ Falling back to the full download so Gemini can watch the video.")
+        video, title = fetch_full()
+    return get_visual_clips(video, duration, viewer_clips=viewer_clips), video, title, True
 
 
 # Silent footage is sent to Gemini as video (~300 tokens/s): an hour no longer
@@ -2536,6 +2834,11 @@ if __name__ == '__main__':
         viewer_clips = twitch_signals.viewer_clips_for_job(args.url, 0)
 
     # 1. Get Input Video
+    source_pieces_used = []
+    audio_path = None    # audio-first jobs keep it apart from the video
+    range_mode = False   # audio-first URL job: input_video is the audio file
+    replay_ok = False
+    source_meta = {}     # what the one extraction saw (duration, title, heatmap, chapters)
     if args.url:
         # For multi-clip runs, treat --output as an OUTPUT DIRECTORY (create it if needed).
         # For whole-video runs (--skip-analysis), --output can be a file path.
@@ -2560,13 +2863,13 @@ if __name__ == '__main__':
         early = {"lock": threading.Lock(), "done": threading.Event(), "started": False,
                  "abandoned": False, "invalid": False, "transcript": None, "clips": None}
 
-        def _early_work(audio_path, audio_duration):
+        def _early_work(audio_path, audio_duration, meta=None):
             try:
                 t = transcribe_video(audio_path)
                 early["transcript"] = t
-                if audio_duration and not speech_is_sparse(t, audio_duration):
-                    early["clips"] = get_viral_clips(t, audio_duration,
-                                                     viewer_clips=viewer_clips)
+                if audio_duration:
+                    early["clips"] = get_viral_clips(t, audio_duration, viewer_clips=viewer_clips,
+                                                     silent=silent_context(audio_path, meta))
             except Exception as e:
                 print(f"   ℹ️ Early transcription skipped ({type(e).__name__}: {e}).")
                 early["transcript"] = early["clips"] = None
@@ -2577,20 +2880,33 @@ if __name__ == '__main__':
                 except OSError:
                     pass
 
-        def _on_audio(audio_path, audio_duration):
+        def _on_audio(audio_path, audio_duration, meta=None):
             with early["lock"]:
                 if early["abandoned"]:
                     return
                 early["started"] = True
-            threading.Thread(target=_early_work, args=(audio_path, audio_duration),
+            threading.Thread(target=_early_work, args=(audio_path, audio_duration, meta),
                              daemon=True).start()
 
         use_early = (not args.skip_analysis and not args.transcript
                      and os.environ.get("EARLY_AUDIO", "1").strip() != "0"
                      and not os.environ.get("MAX_SOURCE_MINUTES", "").strip()
                      and not os.path.exists(os.path.join(output_dir, TRANSCRIPT_CHECKPOINT)))
-        input_video, video_title = download_youtube_video(
-            args.url, output_dir, on_audio=_on_audio if use_early else None)
+        range_mode = use_range_download(args, os.environ,
+                                        os.environ.get("BILLING_ENABLED", "").lower() in ("1", "true", "yes"))
+        if range_mode:
+            # Audio first: transcription and the pick need no video. The video
+            # comes after the pick, and only as far as the picked clips need.
+            try:
+                input_video, video_title = download_youtube_video(
+                    args.url, output_dir, audio_only=True, meta_out=source_meta)
+            except NoAudioFormat:
+                print("⚠️ No audio-only stream: downloading the whole video instead.")
+                range_mode = False
+        replay_ok = range_mode   # only the audio-first extraction fills source_meta
+        if not range_mode:
+            input_video, video_title = download_youtube_video(
+                args.url, output_dir, on_audio=_on_audio if use_early else None)
     else:
         input_video = args.input
         video_title = os.path.splitext(os.path.basename(input_video))[0]
@@ -2631,46 +2947,53 @@ if __name__ == '__main__':
         if _stamp(input_video) != _before and globals().get("early") is not None:
             early["invalid"] = True  # its words cover the part that was cut off
 
-    # Layout choice is per SOURCE video, not per clip: one upload and one call
-    # instead of one per clip, and the answer is a property of the material
-    # ("this is a screencast"), which does not change between its own clips.
-    # It runs before any render so the modules are switched on in time.
-    if layout_picker.ENABLED:
-        try:
-            _cap = cv2.VideoCapture(input_video)
-            _fps = _cap.get(cv2.CAP_PROP_FPS) or 30.0
-            _duration = int(_cap.get(cv2.CAP_PROP_FRAME_COUNT)) / _fps
-            _w = int(_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            _h = int(_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            _cap.release()
-            from reframe_v2 import source_already_fits  # imports main back
-            # A source already shot vertical has no width to reorganise, and
-            # the render passes it through whatever the model says. Asking
-            # anyway costs a Gemini call per upload to be ignored.
-            if _w and _h and source_already_fits(_w, _h, ASPECT_RATIO):
-                print(f"   ↕️  Source is {_w}x{_h} — already vertical, no layout to pick.")
-            else:
-                layout_picker.pick_and_apply(input_video, _duration)
-        except Exception as e:
-            print(f"⚠️ Layout choice skipped ({e}) — using the default layout.")
+    def _probe_source(input_video):
+        """Per-source decisions that need frames: the layout picker and the
+        burned-in subtitle band. Returns the band (or None)."""
+        # Layout choice is per SOURCE video, not per clip: one upload and one call
+        # instead of one per clip, and the answer is a property of the material
+        # ("this is a screencast"), which does not change between its own clips.
+        # It runs before any render so the modules are switched on in time.
+        if layout_picker.ENABLED:
+            try:
+                _cap = cv2.VideoCapture(input_video)
+                _fps = _cap.get(cv2.CAP_PROP_FPS) or 30.0
+                _duration = int(_cap.get(cv2.CAP_PROP_FRAME_COUNT)) / _fps
+                _w = int(_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                _h = int(_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                _cap.release()
+                from reframe_v2 import source_already_fits  # imports main back
+                # A source already shot vertical has no width to reorganise, and
+                # the render passes it through whatever the model says. Asking
+                # anyway costs a Gemini call per upload to be ignored.
+                if _w and _h and source_already_fits(_w, _h, ASPECT_RATIO):
+                    print(f"   ↕️  Source is {_w}x{_h} — already vertical, no layout to pick.")
+                else:
+                    layout_picker.pick_and_apply(input_video, _duration)
+            except Exception as e:
+                print(f"⚠️ Layout choice skipped ({e}) — using the default layout.")
 
-    # Subtitles already burned into the source: trim them off each cut clip so
-    # our captions are the only text layer (burned_subtitles.py). Only when we
-    # caption at all, and never on a vertical source, which is passed through.
-    source_subtitle_band = None
-    if (not args.skip_analysis
-            and os.environ.get("AUTO_CAPTIONS", "1").strip() != "0"):
-        try:
-            import burned_subtitles
-            _cap = cv2.VideoCapture(input_video)
-            _w = int(_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            _h = int(_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            _cap.release()
-            from reframe_v2 import source_already_fits
-            if not (_w and _h and source_already_fits(_w, _h, ASPECT_RATIO)):
-                source_subtitle_band = burned_subtitles.detect(input_video)
-        except Exception as e:
-            print(f"⚠️ Burned-in subtitle check skipped ({e}).")
+        # Subtitles already burned into the source: trim them off each cut clip so
+        # our captions are the only text layer (burned_subtitles.py). Only when we
+        # caption at all, and never on a vertical source, which is passed through.
+        source_subtitle_band = None
+        if (not args.skip_analysis
+                and os.environ.get("AUTO_CAPTIONS", "1").strip() != "0"):
+            try:
+                import burned_subtitles
+                _cap = cv2.VideoCapture(input_video)
+                _w = int(_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                _h = int(_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                _cap.release()
+                from reframe_v2 import source_already_fits
+                if not (_w and _h and source_already_fits(_w, _h, ASPECT_RATIO)):
+                    source_subtitle_band = burned_subtitles.detect(input_video)
+            except Exception as e:
+                print(f"⚠️ Burned-in subtitle check skipped ({e}).")
+
+        return source_subtitle_band
+
+    source_subtitle_band = None if range_mode else _probe_source(input_video)
 
     # 2. Decision: Analyze clips or process whole?
     if args.skip_analysis:
@@ -2685,11 +3008,22 @@ if __name__ == '__main__':
         render_clip(input_video, output_file, output_format)
     else:
         # Get duration (needed by both the transcript and the vision path).
-        cap = cv2.VideoCapture(input_video)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        duration = frame_count / fps
-        cap.release()
+        if range_mode:
+            audio_path = input_video
+            duration = probe_media_duration(audio_path)
+            meta_duration = source_meta.get('duration')
+            if meta_duration and duration and abs(float(meta_duration) - duration) >= 2:
+                print(f"⚠️ Audio is {duration:.0f}s but the page says {float(meta_duration):.0f}s: "
+                      f"trusting the audio.")
+            duration = duration or float(meta_duration or 0)
+            if duration <= 0:
+                raise RuntimeError("Could not read the duration of the downloaded audio.")
+        else:
+            cap = cv2.VideoCapture(input_video)
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            duration = frame_count / fps
+            cap.release()
 
         # 3. Transcribe — unless the video has no audio, in which case fall back
         # to Gemini vision (picks clips from the imagery instead of the speech).
@@ -2733,24 +3067,36 @@ if __name__ == '__main__':
             except NoAudioError as e:
                 print(f"🔇 {e} — switching to visual analysis.")
 
-        # Music-only or wordless footage transcribes to a handful of words.
-        # Clip it by what is on screen instead, like a video with no audio.
+        # Music-only or wordless footage transcribes to a handful of words: its
+        # silent stretches are clipped from audio and heat (select_clips), and
+        # the vision route is the last resort.
         if transcript is not None and speech_is_sparse(transcript, duration):
             n_words = sum(len((sg.get("text") or "").split()) for sg in transcript["segments"])
-            print(f"🔇 Only {n_words} word(s) of speech in {duration:.0f}s — "
-                  f"switching to visual analysis.")
-            transcript = None
+            print(f"🔇 Only {n_words} word(s) of speech in {duration:.0f}s.")
 
-        # 4. Gemini Analysis (transcript-driven, or vision for silent videos)
+        # 4. Pick clips (speech windows, non-speech windows, vision as last resort)
         early_clips = (early_state or {}).get("clips") if early_state else None
+        yt = replay_ok and str(source_meta.get('extractor') or '').lower().startswith('youtube')
+        replay_heat = source_meta.get('heatmap') if yt else None
+        vision = False
         if (transcript is not None and early_clips
                 and transcript is early_state["transcript"]):
             print("♻️ Using the clips Gemini picked while the video downloaded.")
             clips_data = early_clips
-        elif transcript is not None:
-            clips_data = get_viral_clips(transcript, duration, viewer_clips=viewer_clips)
         else:
-            clips_data = get_visual_clips(input_video, duration, viewer_clips=viewer_clips)
+            def _fetch_full():
+                return download_youtube_video(args.url, output_dir)
+            clips_data, _full_video, _full_title, vision = select_clips(
+                transcript, duration, input_video, viewer_clips=viewer_clips, replay_heat=replay_heat,
+                silent={"audio": input_video, "title": source_meta.get('title') or video_title,
+                        "chapters": source_meta.get('chapters')} if transcript is not None else None,
+                fetch_full=_fetch_full if range_mode else None)
+            if _full_video:
+                input_video, video_title = _full_video, _full_title
+                source_subtitle_band = _probe_source(input_video)
+                range_mode = False
+        if vision or (transcript is not None and speech_is_sparse(transcript, duration)):
+            transcript = None  # stray words are not speech to caption
 
         if not clips_data or 'shorts' not in clips_data:
             # Deliberately fail instead of reframing the whole video: that path
@@ -2760,6 +3106,30 @@ if __name__ == '__main__':
                 "Clip detection failed — the AI model did not return usable clips for this video.")
         else:
             print(f"🔥 Found {len(clips_data['shorts'])} clips!")
+            piece_for = {}      # clip index -> (piece file, piece start in source seconds)
+            source_pieces = []  # what metadata records for the editor
+            if range_mode:
+                import range_ingest
+                from clip_selection import clip_count_targets
+                n_picked = len(clips_data['shorts'])
+                clips_data['shorts'], piece_for, source_pieces = range_ingest.plan_pieces(
+                    clips_data['shorts'], duration,
+                    lambda merged: download_youtube_video(args.url, output_dir, ranges=merged)[0],
+                    min_keep=min(n_picked, clip_count_targets(n_picked)[0]))
+                source_pieces_used.extend(source_pieces)
+                from reframe_v2 import source_already_fits  # imports main back
+
+                def _dims(path):
+                    _c = cv2.VideoCapture(path)
+                    try:
+                        return (int(_c.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                                int(_c.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+                    finally:
+                        _c.release()
+                source_subtitle_band = range_ingest.probe_pieces(
+                    output_dir, source_pieces, ASPECT_RATIO, source_already_fits, _dims,
+                    os.environ.get("AUTO_CAPTIONS", "1").strip() != "0",
+                    args.skip_analysis)
 
             # Save metadata. Silent videos have no transcript → no subtitles,
             # which is correct (there's no speech to caption).
@@ -2768,7 +3138,8 @@ if __name__ == '__main__':
             # again and reproduce the render settings, so record both. The
             # basename is enough — the file sits in the job dir (URL jobs with
             # --keep-original) or in uploads/ (upload jobs).
-            clips_data['source_video'] = os.path.basename(input_video)
+            range_ingest.record_source(clips_data, input_video, source_pieces,
+                                       args.url if range_mode else None, duration, range_mode)
             clips_data['output_format'] = output_format
             if source_subtitle_band:
                 clips_data['source_subtitle_band'] = source_subtitle_band
@@ -2791,7 +3162,10 @@ if __name__ == '__main__':
 
                 try:
                     # ffmpeg cut — re-encoding for precision on strict seconds
-                    cut_clip(input_video, clip_temp_path, start, end, i + 1)
+                    # Range jobs cut from the padded piece, in piece time; the
+                    # clip dict and everything downstream keep source time.
+                    cut_src, offset = piece_for.get(i, (input_video, 0.0))
+                    cut_clip(cut_src, clip_temp_path, start - offset, end - offset, i + 1)
 
                     # Layer order: the canonical reframe stays CLEAN, the hook
                     # is a derived hooked_ file, captions go last on top of
@@ -2901,6 +3275,9 @@ if __name__ == '__main__':
                 write_json_atomic(metadata_file, clips_data, indent=2)
 
     # Clean up original if requested
+    if audio_path:
+        import range_ingest
+        range_ingest.cleanup(output_dir, audio_path, source_pieces_used, args.keep_original)
     if args.url and not args.keep_original and os.path.exists(input_video):
         os.remove(input_video)
         print(f"🗑️  Cleaned up downloaded video.")

@@ -345,6 +345,10 @@ def _dim_hex_color(hex_color, opacity, fallback="FFFFFF"):
     return f"{r:02X}{g:02X}{b:02X}"
 
 
+# PlayResX of a 9:16 frame at PlayResY=288; only written when a seam is pinned.
+SEAM_PLAY_RES_X = 162
+
+
 def generate_ass(transcript, clip_start, clip_end, output_path,
                  max_chars=20, max_duration=2.0, alignment='bottom',
                  fontsize=16, font_name="Verdana", font_color="#FFFFFF",
@@ -392,10 +396,21 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     # (start, end) in clip seconds (layout_ranges.split_ranges); the style's
     # own alignment still rules everywhere else. Only the ASS path can do
     # this: SRT burns carry one alignment for the whole file.
-    seam_ranges = [(float(a), float(b)) for a, b in (split_ranges or [])]
+    # A range may carry a third value, the seam's height as a fraction of the
+    # frame (0.6 on a 60/40 slot split). \an5 alone centres at 50%, so a seam
+    # elsewhere is pinned with \pos, which needs an explicit PlayResX (9:16).
+    seam_ranges = [(float(r[0]), float(r[1]), r[2] if len(r) > 2 else None)
+                   for r in (split_ranges or [])]
+    custom_seam = any(f is not None and abs(float(f) - 0.5) > 1e-6
+                      for _a, _b, f in seam_ranges)
 
     def seam_prefix(t):
-        return "{\\an5}" if any(a <= t < b for a, b in seam_ranges) else ""
+        for a, b, frac in seam_ranges:
+            if a <= t < b:
+                if frac is None or abs(float(frac) - 0.5) <= 1e-6:
+                    return "{\\an5}"
+                return f"{{\\an5\\pos({SEAM_PLAY_RES_X / 2:g},{288 * float(frac):.1f})}}"
+        return ""
 
     safe_font = _sanitize_font_name(font_name)
     base_opacity = _clamp_number(base_opacity, 0.05, 1.0, 1.0)
@@ -462,6 +477,7 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
         "[Script Info]\n"
         "ScriptType: v4.00+\n"
         "PlayResY: 288\n"
+        + (f"PlayResX: {SEAM_PLAY_RES_X}\n" if custom_seam else "") +
         "WrapStyle: 0\n"
         "ScaledBorderAndShadow: yes\n"
         "\n"

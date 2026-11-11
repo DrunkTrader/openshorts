@@ -30,6 +30,8 @@ from starlette.background import BackgroundTask
 from pydantic import BaseModel
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
 import recut
+import slot_library
+import slot_split
 import layout_ranges
 import watermarked
 import media_auth
@@ -1947,13 +1949,17 @@ def _sweep_retained_sources(now=None):
             if not metas:
                 continue
             with open(metas[0]) as f:
-                name = json.load(f).get('source_video')
-            if not name:
-                continue
-            src = os.path.join(OUTPUT_DIR, job_id, os.path.basename(name))
-            if (os.path.exists(src)
-                    and now - os.path.getmtime(src) > SOURCE_RETENTION_SECONDS):
-                os.remove(src)
+                meta = json.load(f)
+            # A range job kept padded pieces instead of one source file.
+            names = [meta.get('source_video')] + [p.get('file') for p in meta.get('source_pieces') or []]
+            removed = False
+            for name in dict.fromkeys(n for n in names if n):
+                src = os.path.join(OUTPUT_DIR, job_id, os.path.basename(name))
+                if (os.path.exists(src)
+                        and now - os.path.getmtime(src) > SOURCE_RETENTION_SECONDS):
+                    os.remove(src)
+                    removed = True
+            if removed:
                 yield job_id
         except Exception:
             continue
@@ -2576,6 +2582,9 @@ def _rm_under(base_dir: str, relative: str):
             pass
 
 
+_OWNER_DIR_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+
+
 def _purge_local_jobs_for_user(user_id) -> int:
     """Delete this user's working files and in-memory records from local disk.
 
@@ -2635,6 +2644,14 @@ def _purge_local_jobs_for_user(user_id) -> int:
             _rm_under(OUTPUT_DIR, os.path.basename(out))
         saas_jobs.pop(jid, None)
         removed += 1
+
+    # Slot-split library: uploaded clips and their thumbnails.
+    if _OWNER_DIR_RE.match(uid):
+        for base, rel in ((UPLOAD_DIR, f"slot_library/{uid}"),
+                          (THUMBNAILS_DIR, f"slot_{uid}")):
+            if os.path.isdir(os.path.join(base, rel)):
+                _rm_under(base, rel)
+                removed += 1
 
     for sid, sess in list(thumbnail_sessions.items()):
         if not _owned_by(sess, uid):
@@ -3083,7 +3100,9 @@ def enqueue_output(out, job_id):
                 if decoded_line.startswith("PROXY_BYTES="):
                     try:
                         if job_id in jobs:
-                            jobs[job_id]['proxy_bytes'] = int(decoded_line.split("=", 1)[1])
+                            # A range job downloads twice (audio, pieces): sum.
+                            jobs[job_id]['proxy_bytes'] = (jobs[job_id].get('proxy_bytes') or 0) \
+                                + int(decoded_line.split("=", 1)[1])
                     except ValueError:
                         pass
                     continue
@@ -3094,7 +3113,8 @@ def enqueue_output(out, job_id):
                         from cloud import proxy_ledger as _pl
                         route = _pl.parse_route_line(decoded_line)
                         if route is not None and job_id in jobs:
-                            jobs[job_id]['proxy_route'] = route
+                            jobs[job_id]['proxy_route'] = _pl.merge_routes(
+                                jobs[job_id].get('proxy_route'), route)
                     except Exception:
                         pass
                     continue
@@ -4137,31 +4157,79 @@ async def get_status(job_id: str, request: Request):
     }
 
 
-def _locate_source(job_id: str):
-    """Find a job's source video on disk, or None.
+def _locate_source_for_range(job_id: str, start=None, end=None):
+    """``(path, piece_start)`` of the file to cut ``[start, end]`` (absolute
+    source seconds) from; ``(None, 0.0)`` when none holds it.
 
-    Upload jobs keep it in uploads/{job_id}_*; URL jobs keep the download in
-    the job dir (--keep-original) under the name recorded as ``source_video``
-    in metadata.json. Either way it ages out with the normal retention caps.
+    Upload jobs keep the source in uploads/{job_id}_*; legacy URL jobs keep the
+    download in the job dir (--keep-original) under ``source_video``. A range
+    job kept only padded pieces (``source_pieces``): the one holding the whole
+    range is returned with its start, and times on it are source time minus
+    that start. Without a range, the first piece stands for "a source exists".
+    Either way it ages out with the normal retention caps.
     """
     matches = [
         f for f in glob.glob(os.path.join(UPLOAD_DIR, f"{glob.escape(job_id)}_*"))
         if not os.path.basename(f).startswith("thumb_")
     ]
     if matches:
-        return matches[0]
+        return matches[0], 0.0
     try:
         meta_files = glob.glob(os.path.join(OUTPUT_DIR, job_id, "*_metadata.json"))
         if meta_files:
             with open(meta_files[0], 'r') as f:
-                name = json.load(f).get('source_video')
+                meta = json.load(f)
+            job_dir = os.path.join(OUTPUT_DIR, job_id)
+            if meta.get('source_pieces'):
+                import source_ranges
+                piece = source_ranges.pick_piece(
+                    [p for p in meta['source_pieces']
+                     if os.path.exists(os.path.join(job_dir, os.path.basename(p['file'])))],
+                    start, end)
+                if piece:
+                    return os.path.join(job_dir, os.path.basename(piece['file'])), float(piece['start'])
+                return None, 0.0
+            name = meta.get('source_video')
             if name:
-                candidate = os.path.join(OUTPUT_DIR, job_id, os.path.basename(name))
+                candidate = os.path.join(job_dir, os.path.basename(name))
                 if os.path.exists(candidate):
-                    return candidate
+                    return candidate, 0.0
     except Exception:
         pass
-    return None
+    return None, 0.0
+
+
+def _locate_source(job_id: str):
+    """Find a job's source video on disk, or None (see _locate_source_for_range)."""
+    return _locate_source_for_range(job_id)[0]
+
+
+def _source_total_duration(job_id: str, source_path):
+    """Seconds of the WHOLE source: what the file says, except for a range job,
+    whose file is a piece and whose metadata remembers the source's length."""
+    try:
+        meta_files = glob.glob(os.path.join(OUTPUT_DIR, job_id, "*_metadata.json"))
+        with open(meta_files[0], 'r') as f:
+            meta = json.load(f)
+        if meta.get('source_pieces') and meta.get('source_duration'):
+            return float(meta['source_duration'])
+        if meta.get('source_pieces'):
+            return None
+    except Exception:
+        pass
+    return _source_duration_seconds(source_path) if source_path else None
+
+
+def _is_range_job(job_id: str) -> bool:
+    try:
+        with open(glob.glob(os.path.join(OUTPUT_DIR, job_id, "*_metadata.json"))[0]) as f:
+            return bool(json.load(f).get('source_pieces'))
+    except Exception:
+        return False
+
+
+def _segments_span(segments):
+    return min(s['start'] for s in segments), max(s['end'] for s in segments)
 
 
 # How long a signed source URL stays valid. Long enough to survive an editing
@@ -4182,7 +4250,7 @@ def _job_record(job_id: str):
     return jobs.get(job_id) or _job_view_from_disk(job_id)
 
 
-def _signed_source_url(job_id: str) -> str:
+def _signed_source_url(job_id: str, start=None, end=None) -> str:
     """The URL to hand a `<video>` tag for this job's source.
 
     Every place that returns a source URL to the browser must go through here:
@@ -4190,10 +4258,12 @@ def _signed_source_url(job_id: str) -> str:
     authenticate, and the clip editor's source monitor 404s in cloud while
     working perfectly in self-host and in every test.
     """
+    # start/end pick the piece of a range job; the signature covers the job only.
+    span = f"&start={start:.3f}&end={end:.3f}" if start is not None and end is not None else ""
     if not BILLING_ENABLED:
-        return f"/api/source/{job_id}"
+        return f"/api/source/{job_id}" + (f"?{span[1:]}" if span else "")
     exp = int(time.time()) + SOURCE_URL_TTL_SECONDS
-    return f"/api/source/{job_id}?exp={exp}&sig={_source_signature(job_id, exp)}"
+    return f"/api/source/{job_id}?exp={exp}&sig={_source_signature(job_id, exp)}{span}"
 
 
 @app.get("/api/source-url/{job_id}")
@@ -4222,7 +4292,8 @@ async def get_source_url(job_id: str, request: Request):
 
 @app.get("/api/source/{job_id}")
 async def get_source_video(job_id: str, request: Request,
-                           exp: int = 0, sig: str = ""):
+                           exp: int = 0, sig: str = "",
+                           start: Optional[float] = None, end: Optional[float] = None):
     """Stream a job's original source video for the live-analysis preview and
     the clip editor's source monitor.
 
@@ -4252,7 +4323,7 @@ async def get_source_video(job_id: str, request: Request,
             # The job folder can be gone (size cap, sweep) while uploads/<id>_*
             # is still there: the owner then comes from .owner / the Project row.
             await _assert_disk_job_owner(request, job_id)
-    source_path = _locate_source(job_id)
+    source_path = _locate_source_for_range(job_id, start, end)[0]
     if not source_path:
         raise HTTPException(status_code=404, detail="Source not found")
     return FileResponse(source_path, media_type="video/mp4")
@@ -4858,8 +4929,10 @@ async def get_clip_edl(job_id: str, clip_index: int, request: Request):
     transcript = data.get('transcript') or {}
     words = recut.transcript_words(transcript)
 
-    source_path = _locate_source(job_id)
-    source_duration = _source_duration_seconds(source_path) if source_path else None
+    # The file the monitor plays: for a range job, the piece holding this clip.
+    source_path, source_offset = _locate_source_for_range(
+        job_id, *_segments_span(segments + [canonical_range]))
+    source_duration = _source_total_duration(job_id, source_path)
     duration_estimated = source_duration is None
     if duration_estimated:
         # Best remaining scale for the source track: the last spoken word or
@@ -4894,7 +4967,10 @@ async def get_clip_edl(job_id: str, clip_index: int, request: Request):
         "words": words_out,
         "source": {
             "available": bool(source_path),
-            "url": _signed_source_url(job_id) if source_path else None,
+            "url": (_signed_source_url(job_id, *(_segments_span(segments + [canonical_range])
+                                                  if _is_range_job(job_id) else ()))
+                    if source_path else None),
+            "offset": source_offset,
             "duration": source_duration,
             "duration_estimated": duration_estimated,
         },
@@ -4986,7 +5062,7 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
 
     _, canonical_range = _clip_recipe_parts(clip)
     source_path = _locate_source(req.job_id)
-    source_duration = _source_duration_seconds(source_path) if source_path else None
+    source_duration = _source_total_duration(req.job_id, source_path)
 
     framing = req.framing or (clip.get('recipe') or {}).get('framing') or 'auto'
     if framing not in _FRAMING_STRATEGIES:
@@ -5023,6 +5099,15 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
             and os.path.exists(canonical_path)
             and recut.within_range(segments, canonical_range['start'],
                                    canonical_range['end']))
+    # Range job: the piece holding every segment, and where it starts.
+    source_offset = 0.0
+    if source_path and not fast:
+        source_path, source_offset = _locate_source_for_range(req.job_id, *_segments_span(segments))
+        if not source_path:
+            raise HTTPException(
+                status_code=409,
+                detail="That part of the source was not kept (only the clip and a "
+                       "margin around it are). Keep the segments within it.")
     if not fast and not source_path:
         raise HTTPException(
             status_code=409,
@@ -5049,7 +5134,8 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
                 reframe=False, captions_transcript=v_transcript,
                 captioner=_recut_captioner(clip))
         return recut.perform_recut(
-            input_path=source_path, segments=segments,
+            input_path=source_path,
+            segments=recut.rebase_segments(segments, source_offset),
             output_dir=output_dir, clean_name=clean_name,
             reframe=True, output_format=data.get('output_format', 'auto'),
             force_strategy=force_strategy,
@@ -5197,7 +5283,7 @@ async def get_clip_scenes(job_id: str, clip_index: int, request: Request):
     # since a re-render rebuilds from source using ONLY what it is sent, the
     # next save would silently drop every earlier adjustment.
     saved_overrides = clip.get('crop_overrides') or {}
-    source_path = _locate_source(job_id)
+    source_path, source_offset = _locate_source_for_range(job_id, *_segments_span(segments))
     if not source_path:
         raise HTTPException(
             status_code=409,
@@ -5216,7 +5302,8 @@ async def get_clip_scenes(job_id: str, clip_index: int, request: Request):
         work_token = f"{clip_index}_{uuid.uuid4().hex[:8]}"
         preview_name = f"temp_preview_{clip_index}.mp4"
         preview_path = os.path.join(output_dir, preview_name)
-        work_path = _clip_scene_workfile(source_path, segments, output_dir, work_token)
+        work_path = _clip_scene_workfile(source_path, recut.rebase_segments(segments, source_offset),
+                                         output_dir, work_token)
         try:
             scenes, fps = m.detect_scenes(work_path)
             fps = float(fps) or 30.0
@@ -5382,7 +5469,7 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
             detail="Horizontal clips keep the full frame; there is no crop to reframe.")
 
     segments, canonical_range = _clip_recipe_parts(clip)
-    source_path = _locate_source(req.job_id)
+    source_path, source_offset = _locate_source_for_range(req.job_id, *_segments_span(segments))
     if not source_path:
         raise HTTPException(
             status_code=409,
@@ -5418,7 +5505,8 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
 
     def run():
         return recut.perform_recut(
-            input_path=source_path, segments=segments,
+            input_path=source_path,
+            segments=recut.rebase_segments(segments, source_offset),
             output_dir=output_dir, clean_name=clean_name,
             reframe=True, output_format=data.get('output_format', 'auto'),
             force_strategy=force_strategy,
@@ -5470,6 +5558,207 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
         if reservation_id:
             await _metering.release_reservation(reservation_id)
         print(f"Reframe Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Slot split: uploaded clips as a half of the stack (item 10) ---------------
+# Not exposed to MCP/agents: the dashboard's "Split with clip" panel only.
+SLOT_UPLOAD_MAX_MB = int(os.environ.get("SLOT_UPLOAD_MAX_MB", "500"))
+SLOT_UPLOAD_MAX_SECONDS = float(os.environ.get("SLOT_UPLOAD_MAX_SECONDS", "600"))
+SLOT_LIBRARY_MAX_ITEMS = int(os.environ.get("SLOT_LIBRARY_MAX_ITEMS", "30"))
+_slot_library_lock = asyncio.Lock()
+
+
+async def _slot_library_dirs(request):
+    """(video_dir, thumb_dir, thumb_url_prefix) of the caller's library.
+    Videos sit under uploads/ (never served); thumbnails under the authorised
+    /thumbnails root with an ``.owner`` marker, so _authorize_media applies."""
+    await require_managed_entitlement(request)
+    owner = await _owner_id(request)
+    if BILLING_ENABLED and owner is None:
+        raise HTTPException(status_code=401, detail="Sign in to use the clip library")
+    key = slot_library.owner_key(owner)
+    thumb_dir = os.path.join(THUMBNAILS_DIR, f"slot_{key}")
+    if owner is not None:
+        _write_owner_marker(thumb_dir, owner)
+    return (os.path.join(UPLOAD_DIR, "slot_library", key), thumb_dir,
+            f"/thumbnails/slot_{key}")
+
+
+def _slot_item_view(item, thumb_prefix):
+    return {"id": item["id"], "name": item.get("name"),
+            "duration": item.get("duration"), "width": item.get("width"),
+            "height": item.get("height"), "has_audio": item.get("has_audio"),
+            "thumb": f"{thumb_prefix}/{item['thumb']}" if item.get("thumb") else None}
+
+
+@app.post("/api/slot-uploads")
+async def slot_upload(request: Request, file: UploadFile = File(...)):
+    video_dir, thumb_dir, prefix = await _slot_library_dirs(request)
+    name = os.path.basename((file.filename or "").replace("\\", "/")) or "upload"
+    ext = os.path.splitext(name)[1].lower()
+    if ext not in slot_library.ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=415, detail="Upload an MP4, MOV, WebM or MKV video.")
+    os.makedirs(video_dir, exist_ok=True)
+    tmp = os.path.join(video_dir, f".tmp_{uuid.uuid4().hex}")
+    limit = SLOT_UPLOAD_MAX_MB * 1024 * 1024
+    size = 0
+    try:
+        with open(tmp, "wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > limit:
+                    raise HTTPException(status_code=413, detail=f"File too large. Max size {SLOT_UPLOAD_MAX_MB}MB")
+                out.write(chunk)
+        # Trust boundary: the extension and the client MIME prove nothing.
+        if not slot_library.sniff_container(tmp):
+            raise HTTPException(status_code=415, detail="This file is not a video.")
+        loop = asyncio.get_event_loop()
+        try:
+            w, h, duration, has_audio = await loop.run_in_executor(None, slot_split.probe_video, tmp)
+        except slot_split.SlotError as e:
+            raise HTTPException(status_code=415, detail=str(e))
+        if not 0 < duration <= SLOT_UPLOAD_MAX_SECONDS:
+            raise HTTPException(status_code=413, detail=f"Clips must be at most {SLOT_UPLOAD_MAX_SECONDS:.0f}s long.")
+        async with _slot_library_lock:
+            if len(slot_library.list_items(video_dir)) >= SLOT_LIBRARY_MAX_ITEMS:
+                raise HTTPException(status_code=409, detail=f"The library holds at most {SLOT_LIBRARY_MAX_ITEMS} clips. Delete one first.")
+            item = await loop.run_in_executor(
+                None, slot_library.add, video_dir, thumb_dir, tmp, ext, name[:120],
+                {"width": w, "height": h, "duration": round(duration, 2), "has_audio": has_audio})
+        return _slot_item_view(item, prefix)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+@app.get("/api/slot-uploads")
+async def slot_uploads_list(request: Request):
+    video_dir, _thumb_dir, prefix = await _slot_library_dirs(request)
+    return {"items": [_slot_item_view(i, prefix) for i in slot_library.list_items(video_dir)]}
+
+
+@app.delete("/api/slot-uploads/{upload_id}")
+async def slot_upload_delete(upload_id: str, request: Request):
+    video_dir, thumb_dir, _prefix = await _slot_library_dirs(request)
+    if not slot_split.UPLOAD_ID_RE.match(upload_id):
+        raise HTTPException(status_code=404, detail="Not found")
+    async with _slot_library_lock:
+        if not slot_library.delete(video_dir, thumb_dir, upload_id):
+            raise HTTPException(status_code=404, detail="Not found")
+    return {"success": True}
+
+
+class SlotSplitRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    slots: Dict[str, Any]
+    reapply_captions: bool = True
+
+
+@app.post("/api/clip/split")
+async def split_clip(req: SlotSplitRequest, request: Request):
+    """Re-render a clip as a top/bottom stack whose halves are the clip itself
+    or an uploaded video. Separate from /api/clip/reframe (per-scene framing)
+    and /api/clip/rerender (the cut); same guards and the same per-job lock."""
+    await require_managed_entitlement(request)
+    await _ensure_job_files(req.job_id, request)
+    if req.job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = jobs[req.job_id]
+    await _assert_job_owner(request, job)
+    try:
+        spec = slot_split.parse_slots(req.slots)
+    except slot_split.SlotError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    video_dir, _t, _p = await _slot_library_dirs(request)
+    uploads = {}
+    for upload_id in slot_split.upload_ids(spec):
+        item = slot_library.get(video_dir, upload_id)
+        if not item or not os.path.exists(item["path"]):
+            raise HTTPException(status_code=404, detail="Upload not found in your library")
+        uploads[upload_id] = item
+    if spec["audio"] in ("upload", "mix") and not all(u.get("has_audio") for u in uploads.values()):
+        raise HTTPException(status_code=400, detail="The chosen upload has no audio track.")
+
+    lock = _rerender_locks.setdefault(req.job_id, asyncio.Lock())
+    async with lock:
+        return await _split_locked(req, request, job, spec, uploads)
+
+
+async def _split_locked(req, request, job, spec, uploads):
+    output_dir = os.path.join(OUTPUT_DIR, req.job_id)
+    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    if not json_files:
+        raise HTTPException(status_code=404, detail="Metadata not found")
+    with open(json_files[0], 'r') as f:
+        data = json.load(f)
+    clips = data.get('shorts', [])
+    if req.clip_index < 0 or req.clip_index >= len(clips):
+        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = clips[req.clip_index]
+    if data.get('output_format') in ('horizontal', 'square'):
+        raise HTTPException(status_code=400,
+                            detail="Slot split needs a vertical (9:16) clip.")
+
+    segments, canonical_range = _clip_recipe_parts(clip)
+    source_path, source_offset = _locate_source_for_range(req.job_id, *_segments_span(segments))
+    if not source_path:
+        raise HTTPException(
+            status_code=409,
+            detail="The source video is no longer on the server, so this clip can no longer be split.")
+
+    reservation_id = await reserve_managed_action(
+        request, _cloud_config.EDITOR_ACTION_MINUTES if BILLING_ENABLED else 0,
+        req.job_id, "split")
+    v_transcript = (recut.virtual_transcript(data.get('transcript') or {}, segments)
+                    if req.reapply_captions else None)
+    base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+    clean_name = f"{base_name}_clip_{req.clip_index + 1}.mp4"
+    out_size = (1080, 1920)
+    try:
+        w, h, _d, _a = slot_split.probe_video(os.path.join(output_dir, clean_name))
+        out_size = (w - w % 2, h - h % 2)
+    except Exception:
+        pass  # canonical gone: the delivery default
+
+    def run():
+        return slot_split.perform_split(
+            source_path=source_path,
+            segments=recut.rebase_segments(segments, source_offset),
+            spec=spec, uploads=uploads, output_dir=output_dir,
+            clean_name=clean_name, out_size=out_size,
+            captions_transcript=v_transcript, captioner=_recut_captioner(clip))
+
+    try:
+        loop = asyncio.get_event_loop()
+        served_name, _clean = await loop.run_in_executor(None, run)
+        served_name = await _deliver(request, req.job_id, served_name)
+        new_video_url = f"/videos/{req.job_id}/{served_name}"
+        new_recipe = {"v": 1, "segments": segments,
+                      "canonical_range": canonical_range, "split_slots": spec}
+        updates = {
+            'video_url': new_video_url,
+            'recipe': new_recipe,
+            'layout_ranges': layout_ranges.read(os.path.join(output_dir, _clean)),
+        }
+        clip.update(updates)
+        data['shorts'] = clips
+        write_json_atomic(json_files[0], data, indent=2)
+        mem_clips = (job.get('result') or {}).get('clips') or []
+        if req.clip_index < len(mem_clips):
+            mem_clips[req.clip_index].update(updates)
+        _archive_clip_edit_bg(req.job_id, req.clip_index, served_name)
+        if reservation_id:
+            await _metering.commit_reservation(reservation_id)
+        return {"success": True, "new_video_url": new_video_url,
+                "recipe": new_recipe,
+                "start": min(s['start'] for s in segments),
+                "end": max(s['end'] for s in segments)}
+    except Exception as e:
+        if reservation_id:
+            await _metering.release_reservation(reservation_id)
+        print(f"Slot split error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

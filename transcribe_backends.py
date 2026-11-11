@@ -226,8 +226,20 @@ def run_whisper_transcription(media_path, **params):
         return _run_whisper_once(media_path, **params)
 
 
+def whisper_params():
+    """Decode params with the VAD switch applied: ``WHISPER_VAD=0`` turns off
+    the bundled silero VAD (on by default, it keeps music and noise from being
+    transcribed as speech); ``WHISPER_VAD_MIN_SILENCE_MS`` sets its silence gap."""
+    params = dict(WHISPER_TRANSCRIBE_PARAMS,
+                  vad_filter=os.environ.get("WHISPER_VAD", "1").strip() != "0")
+    gap = os.environ.get("WHISPER_VAD_MIN_SILENCE_MS", "").strip()
+    if params["vad_filter"] and gap.isdigit():
+        params["vad_parameters"] = {"min_silence_duration_ms": int(gap)}
+    return params
+
+
 def _transcribe_with_whisper(media_path):
-    segments, info = run_whisper_transcription(media_path, **WHISPER_TRANSCRIBE_PARAMS)
+    segments, info = run_whisper_transcription(media_path, **whisper_params())
 
     out_segments = []
     text_parts = []

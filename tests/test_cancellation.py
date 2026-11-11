@@ -282,7 +282,7 @@ class TestPause:
         assert e.value.status_code == 409
 
     def test_the_ui_knows_the_pause_reasons(self):
-        modal = open(os.path.join(REPO, "dashboard/src/components/CancelPlanModal.jsx")).read()
+        modal = open(os.path.join(REPO, "dashboard/src/components/CancelPlanModal.jsx"), encoding="utf-8").read()
         assert "pause_reasons" in modal and "/api/billing/pause" in modal
 
 
@@ -331,6 +331,6 @@ class TestReasons:
         assert set(cancellation.CANCEL_REASONS.values()) <= stripe_enum
 
     def test_the_ui_offers_exactly_the_reasons_the_server_accepts(self):
-        modal = open(os.path.join(REPO, "dashboard/src/components/CancelPlanModal.jsx")).read()
+        modal = open(os.path.join(REPO, "dashboard/src/components/CancelPlanModal.jsx"), encoding="utf-8").read()
         for value in cancellation.CANCEL_REASONS:
             assert f"'{value}'" in modal, f"{value} is accepted but never offered"

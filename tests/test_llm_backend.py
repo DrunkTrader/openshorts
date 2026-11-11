@@ -268,3 +268,15 @@ def test_reasoning_effort_sent_only_when_set(local, monkeypatch):
     llm_backend.generate_json("p", gemini_worker.ScoreResponse)
     assert "reasoning_effort" not in bodies[0]
     assert bodies[1]["reasoning_effort"] == "none"
+
+
+def test_stream_stops_at_done_and_ignores_later_chunks(local, monkeypatch):
+    monkeypatch.setenv("LLM_STREAM", "1")
+    after = {"choices": [{"delta": {"content": "TRAILING"}}],
+             "usage": {"prompt_tokens": 999, "completion_tokens": 999}}
+    body = _sse(*_deltas(json.dumps(_WINDOWS))).content + f"data: {json.dumps(after)}\n\n".encode()
+    _serve(lambda r: httpx.Response(
+        200, headers={"content-type": "text/event-stream"}, content=body), monkeypatch)
+    parsed, cost = llm_backend.generate_json("p", gemini_worker.ScoreResponse)
+    assert parsed["windows"][0]["id"] == "w0"
+    assert cost["input_tokens"] != 999  # the chunk after [DONE] was not read

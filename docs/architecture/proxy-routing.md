@@ -65,6 +65,24 @@ identically.
 - Do not keep `PROXY_URL` in a local `.env`: every local `main.py` run would then
   bill the per-GB proxy.
 
+## Range jobs: audio first, then pieces (self-host)
+
+A self-host YouTube URL job downloads **twice** through the same ladder
+(`_download_youtube_video`, one attempt plan): first the audio track alone
+(`audio_only`, `bestaudio[ext=m4a]/bestaudio`), then, after the clips are
+picked, only the padded ranges of video (`ranges`, one yt-dlp session, pieces
+re-encoded from their requested start). Same routes, cookies first / anonymous
+second, 1080p except 720p on the per-GB proxy, `noplaylist`, ssrf guard.
+Audio is required, so it may take the paid route when direct and static fail.
+`RANGE_DOWNLOAD=0`, Cloud (`BILLING_ENABLED`), source caps, `--skip-analysis`,
+`--transcript` and non-YouTube URLs keep the single full download.
+
+Each call prints its own `PROXY_ROUTE=` / `PROXY_BYTES=`; `app.py` sums the
+bytes and merges the routes (`proxy_ledger.merge_routes`). The ffmpeg section
+downloader reports only each finished piece's file size, which is also the
+floor used for paid bytes (a lower bound of the wire bytes). A source with no
+audio-only stream stops after one attempt and falls back to the full download.
+
 ## Ledger and alerts
 
 `main.py` prints `PROXY_ROUTE=<json>` after every download (winner, paid bytes

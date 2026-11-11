@@ -29,6 +29,8 @@ _X264_ARGS = {
     DELIVERY: ["-c:v", "libx264", "-preset", "fast", "-crf", "22"],
     INTERMEDIATE: ["-c:v", "libx264", "-preset", "fast", "-crf", "18"],
 }
+_X264_PRESETS = ("ultrafast", "superfast", "veryfast", "faster", "fast",
+                 "medium", "slow", "slower", "veryslow")
 
 # NVENC -cq is not 1:1 with x264 CRF: benchmarked on the prod GPU (RTX 4000
 # Ada), cq ≈ crf + 7 lands in the same file-size ballpark, with vbr + AQ for
@@ -217,7 +219,15 @@ def video_encode_args(tier=QUALITY):
 
     if use_nvenc and tier == INTERMEDIATE:
         return _intermediate_nvenc_args()
-    return list((_NVENC_ARGS if use_nvenc else _X264_ARGS)[tier])
+    if use_nvenc:
+        return list(_NVENC_ARGS[tier])
+    args = list(_X264_ARGS[tier])
+    # X264_PRESET overrides every tier's libx264 preset, e.g. "veryfast" for
+    # quick test renders on a small CPU box; unset keeps the tiers as above.
+    override = os.environ.get("X264_PRESET", "").strip().lower()
+    if override in _X264_PRESETS:
+        args[args.index("-preset") + 1] = override
+    return args
 
 
 def _intermediate_nvenc_args():

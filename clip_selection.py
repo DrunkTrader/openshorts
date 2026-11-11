@@ -130,6 +130,24 @@ def score_batches(windows, batch_size):
     return out
 
 
+def clip_rank(clip):
+    """Sort key for comparing clips across groups: ``rank_score`` (0-1, from the
+    merged speech/non-speech ranking, ``silent_signals.merge_rankings``) first,
+    then the model's ``predicted_score`` to order clips of one window. A list
+    without ``rank_score`` (pure speech) compares on ``predicted_score`` alone.
+    ``predicted_score`` stays on the clip for display only."""
+    try:
+        pred = float(clip.get("predicted_score") or 0)
+    except (TypeError, ValueError, AttributeError):
+        pred = 0.0
+    try:
+        rs = clip.get("rank_score")
+        rs = float(rs) if rs is not None else pred / 100.0
+    except (TypeError, ValueError, AttributeError):
+        rs = pred / 100.0
+    return (rs, pred)
+
+
 def trim_to_best(shorts, max_clips):
     """Cut an over-long detail-pass result down to ``max_clips`` BY SCORE.
 
@@ -154,14 +172,8 @@ def trim_to_best(shorts, max_clips):
     if len(shorts) <= max_clips:
         return list(shorts)
 
-    def score(item):
-        try:
-            return float(item[1].get("predicted_score") or 0)
-        except (TypeError, ValueError, AttributeError):
-            return 0.0
-
     indexed = list(enumerate(shorts))
-    best = sorted(indexed, key=score, reverse=True)[:max_clips]
+    best = sorted(indexed, key=lambda item: clip_rank(item[1]), reverse=True)[:max_clips]
     return [item for _, item in sorted(best, key=lambda pair: pair[0])]
 
 
@@ -283,9 +295,282 @@ def build_transcript_windows(transcript_result, video_duration,
     return windows
 
 
+def _word_spans(transcript_result):
+    """``[(start, end, n_words)]``: one span per timed word when the segment has
+    word timestamps (Whisper stretches a segment's end across a long pause, so
+    the segment alone would smear its words over the silence), else the segment."""
+    out = []
+    for g in (transcript_result or {}).get("segments", []):
+        timed = [w for w in g.get("words") or []
+                 if isinstance(w, dict) and w.get("start") is not None and w.get("end") is not None]
+        if timed:
+            out.extend((float(w["start"]), float(w["end"]), 1) for w in timed)
+        else:
+            n = len(str(g.get("text") or "").split())
+            if n:
+                out.append((float(g.get("start", 0)), float(g.get("end", 0)), n))
+    return out
+
+
+def speech_density(transcript_result, video_duration, stretch=30.0):
+    """``[(start, end, words_per_min)]`` over the whole timeline in ``stretch``
+    steps (the last one may be shorter). Words are counted from their own
+    timestamps; a segment without them spreads its words over its duration."""
+    duration = float(video_duration or 0)
+    spans = _word_spans(transcript_result)
+    out, a = [], 0.0
+    while a < duration - 1e-6:
+        b = min(a + stretch, duration)
+        words = 0.0
+        for s, e, n in spans:
+            if e > s:
+                words += n * max(0.0, min(e, b) - max(s, a)) / (e - s)
+            elif a <= s < b:
+                words += n
+        out.append((round(a, 3), round(b, 3), words / ((b - a) / 60.0)))
+        a = b
+    return out
+
+
+def silent_stretches(transcript_result, video_duration, min_len=30.0, max_wpm=5.0):
+    """``[(start, end)]`` runs of consecutive stretches at or under ``max_wpm``
+    that last at least ``min_len`` seconds."""
+    runs, cur = [], None
+    for a, b, wpm in speech_density(transcript_result, video_duration):
+        if wpm <= max_wpm:
+            cur = (cur[0], b) if cur else (a, b)
+        elif cur:
+            runs.append(cur)
+            cur = None
+    if cur:
+        runs.append(cur)
+    return [r for r in runs if r[1] - r[0] >= min_len - 1e-6]
+
+
+def _split_at_gaps(transcript_result, gap=10.0):
+    """Segments cut where two consecutive words are ``gap`` s or more apart, and
+    trimmed to their words when Whisper stretched an edge across a pause, so a
+    pause never rides inside a speech window. Segments without word timestamps
+    pass through."""
+    segs = []
+    for g in (transcript_result or {}).get("segments", []):
+        words = [w for w in g.get("words") or []
+                 if isinstance(w, dict) and w.get("start") is not None and w.get("end") is not None]
+        if not words:
+            segs.append(g)
+            continue
+        cut = [0] + [i for i in range(1, len(words))
+                     if float(words[i]["start"]) - float(words[i - 1]["end"]) >= gap] + [len(words)]
+        for a, b in zip(cut, cut[1:]):
+            part = words[a:b]
+            s0, e0 = float(g.get("start", 0)), float(g.get("end", 0))
+            s1, e1 = float(part[0]["start"]), float(part[-1]["end"])
+            start = s1 if (a > 0 or s1 - s0 >= gap) else s0
+            end = e1 if (b < len(words) or e0 - e1 >= gap) else e0
+            if len(cut) == 2 and (start, end) == (s0, e0):
+                segs.append(g)
+            else:
+                segs.append({**g, "words": part, "start": start, "end": end,
+                             "text": "".join(w.get("word", "") for w in part).strip()})
+    return {**(transcript_result or {}), "segments": segs}
+
+
+def build_timeline_windows(transcript_result, video_duration, signals=None,
+                           window_seconds=90, overlap_seconds=30):
+    """Windows over the whole timeline: the speech windows of
+    ``build_transcript_windows`` (unchanged) plus ``kind="nonspeech"`` windows
+    (``window_ns_001``, at most ``window_seconds``, no ``text``) over silent
+    stretches of 30 s or more, with their signals attached
+    (``silent_signals.window_signals``). With silent stretches, speech windows
+    are built per island of speech between them (stray words inside a stretch
+    make none), ids renumbered. Silent windows are not ranked here; ``silent_signals.score_nonspeech`` does that."""
+    import silent_signals
+
+    stretches = silent_stretches(transcript_result, video_duration)
+    if not stretches:
+        has_text = any(str(g.get("text") or "").strip() for g in (transcript_result or {}).get("segments", []))
+        return build_transcript_windows(transcript_result, video_duration,
+                                        window_seconds, overlap_seconds) if has_text else []
+    # Speech windows are built per island of speech between the silent stretches,
+    # so none of them spans a stretch (stray words inside one belong to no island).
+    segs = _split_at_gaps(transcript_result)["segments"]
+    bounds = [0.0] + [t for a, b in stretches for t in (a, b)] + [float(video_duration)]
+    speech = []
+    for lo, hi in zip(bounds[0::2], bounds[1::2]):
+        island = [g for g in segs if str(g.get("text") or "").strip()
+                  and lo <= (float(g.get("start", 0)) + float(g.get("end", 0))) / 2 < hi]
+        if island:
+            speech += build_transcript_windows({**transcript_result, "segments": island}, hi,
+                                               window_seconds, overlap_seconds)
+    for i, w in enumerate(speech, 1):
+        w["id"] = f"window_{i:03d}"
+    silent = []
+    for a, b in stretches:
+        n = max(1, math.ceil((b - a) / window_seconds - 1e-9))
+        step = (b - a) / n
+        for i in range(n):
+            silent.append({"id": f"window_ns_{len(silent) + 1:03d}", "kind": "nonspeech",
+                           "start": round(a + i * step, 3), "end": round(a + (i + 1) * step, 3)})
+    silent_signals.window_signals(silent, signals)
+    return speech + silent
+
+
+def build_window_payload(windows, heat=None, replay=None):
+    """The window dicts sent to the LLM. ``heat`` (twitch_signals.window_heat)
+    and ``replay`` (heatmap_signals.window_replay) add their fields only to the
+    windows they cover; extra keys on a window (merged detail windows) pass through (a merged window lists its member ids)."""
+    heat, replay = heat or {}, replay or {}
+    out = []
+    for w in windows:
+        item = {"id": w["id"], "start": w["start"], "end": w["end"], "text": w["text"]}
+        item.update({k: w[k] for k in ("ids", "context_before", "context_after", "search_start", "search_end")
+                     if k in w})
+        h = heat.get(w["id"])
+        if h:
+            item["viewers_clipped"] = h["clips"]
+            item["viewer_clip_views"] = h["views"]
+            item["viewer_moments"] = h["spans"][:5]
+        r = replay.get(w["id"])
+        if r:
+            item["replay_heat"] = round(r["heat"], 2)
+            item["replay_peak"] = round(r["peak"], 2)
+        out.append(item)
+    return out
+
+
+def _timed_segments(transcript_result):
+    return [(float(g.get("start", 0)), float(g.get("end", 0)), str(g.get("text") or "").strip())
+            for g in (transcript_result or {}).get("segments", []) if str(g.get("text") or "").strip()]
+
+
+def _text_between(segs, start, end):
+    """Segments lying inside [start, end]: cut by time, never by string match."""
+    return " ".join(t for s, e, t in segs if s >= start - 1e-3 and e <= end + 1e-3)
+
+
+def merge_adjacent(shortlist, windows, transcript_result, max_span):
+    """Merge runs of consecutive shortlisted windows into one detail window.
+
+    A moment that straddles a window seam is whole in neither window. The merged
+    window keeps the first id (``source_window_id``), spans the run and rebuilds
+    its text from the segments inside it, so the 30 s overlap is counted once.
+    A run is cut when it would exceed ``max_span`` seconds. Order follows the
+    best-ranked member of each group, like the shortlist it replaces.
+    """
+    segs = _timed_segments(transcript_result)
+    if not segs:
+        return [dict(w) for w in shortlist]
+    pos = {w["id"]: i for i, w in enumerate(windows)}
+    rank = {w["id"]: r for r, w in enumerate(shortlist)}
+    ordered = sorted((w for w in shortlist if w["id"] in pos), key=lambda w: pos[w["id"]])
+    groups = []
+    for w in ordered:
+        last = groups[-1] if groups else None
+        if last and pos[w["id"]] == pos[last[-1]["id"]] + 1 and w["end"] - last[0]["start"] <= max_span:
+            last.append(w)
+        else:
+            groups.append([w])
+    groups.sort(key=lambda g: min(rank[w["id"]] for w in g))
+    out = []
+    for g in groups:
+        if len(g) == 1:
+            out.append(dict(g[0]))
+            continue
+        start, end = g[0]["start"], g[-1]["end"]
+        out.append({"id": g[0]["id"], "ids": [w["id"] for w in g], "start": start, "end": end,
+                    "text": _text_between(segs, start, end)})
+    return out
+
+
+def neighbour_context(items, transcript_result, max_chars=600):
+    """``items`` plus the spoken lines just outside each (at most ``max_chars``
+    per side, whole segments), as ``context_before`` / ``context_after`` and the
+    seconds they open up: ``search_start`` / ``search_end``."""
+    segs = _timed_segments(transcript_result)
+    out = []
+    for w in items:
+        before, used, lo = [], 0, w["start"]
+        for s, e, t in reversed([x for x in segs if x[1] <= w["start"] + 1e-3]):
+            if used + len(t) > max_chars:
+                break
+            before.insert(0, t)
+            used, lo = used + len(t) + 1, s
+        after, used, hi = [], 0, w["end"]
+        for s, e, t in [x for x in segs if x[0] >= w["end"] - 1e-3]:
+            if used + len(t) > max_chars:
+                break
+            after.append(t)
+            used, hi = used + len(t) + 1, e
+        out.append({**w, "context_before": " ".join(before), "context_after": " ".join(after),
+                    "search_start": round(lo, 3), "search_end": round(hi, 3)})
+    return out
+
+
+def detail_batches(items, max_chars):
+    """Greedy batches of detail items under ``max_chars`` of JSON text (a lone
+    oversized item still goes alone). For small-context local models."""
+    batches, cur, size = [], [], 0
+    for w in items:
+        n = sum(len(str(w.get(k) or "")) for k in ("text", "context_before", "context_after"))
+        if cur and size + n > max_chars:
+            batches.append(cur)
+            cur, size = [], 0
+        cur.append(w)
+        size += n
+    if cur:
+        batches.append(cur)
+    return batches
+
+
+def bound_clips(shorts, items, video_duration, min_secs, max_secs):
+    """Hold the model's clips to what the prompt only asked of it.
+
+    Returns ``(kept, notes)``; ``notes`` are short reasons, never transcript
+    text. A clip with end <= start is dropped (never repaired); the rest are
+    clamped to [0, duration] and to the [search_start, search_end] of their
+    source window (a merged window answers to any member id), dropped when what
+    is left is under ``min_secs`` and trimmed to ``max_secs`` keeping the start.
+    """
+    owner = {}
+    for w in items:
+        for i in w.get("ids") or [w["id"]]:
+            owner[i] = w
+    kept, notes = [], []
+    for c in shorts:
+        try:
+            a, b = float(c.get("start", 0)), float(c.get("end", 0))
+        except (TypeError, ValueError):
+            notes.append("dropped a clip with a non-numeric start/end")
+            continue
+        tag = c.get("source_window_id") or "?"
+        if not b > a:
+            notes.append(f"dropped {tag}: end <= start")
+            continue
+        lo, hi = 0.0, float(video_duration)
+        w = owner.get(str(c.get("source_window_id") or ""))
+        if w is None and items:
+            # An id the model made up: the nearest window to the clip, not the whole video.
+            mid = (a + b) / 2
+            w = min(items, key=lambda x: max(x.get("search_start", x["start"]) - mid, mid - x.get("search_end", x["end"]), 0))
+            notes.append(f"{tag}: unknown window id, held to {w['id']}")
+        if w is not None:
+            lo, hi = max(lo, w.get("search_start", w["start"])), min(hi, w.get("search_end", w["end"]))
+        na, nb = min(max(a, lo), hi), min(max(b, lo), hi)
+        if (na, nb) != (a, b):
+            notes.append(f"clamped {tag}: {a:g}-{b:g} -> {na:g}-{nb:g}")
+        if nb - na < min_secs:
+            notes.append(f"dropped {tag}: under {min_secs:g}s after clamping")
+            continue
+        if nb - na > max_secs:
+            nb = na + max_secs
+            notes.append(f"trimmed {tag} to {max_secs:g}s")
+        kept.append({**c, "start": round(na, 3), "end": round(nb, 3)})
+    return kept, notes
+
+
 def dedupe_overlapping(shorts, ratio=0.25):
     """Drop clips that overlap an already-kept clip by ``ratio`` of the
-    shorter one, keeping the higher ``predicted_score`` (earlier on a tie).
+    shorter one, keeping the higher ``clip_rank`` (earlier on a tie).
 
     0.25, not 0.5: two clips sharing 25 s of 59 s (42%) both survived the old
     bar and the same punchline came out twice in one batch.
@@ -296,12 +581,6 @@ def dedupe_overlapping(shorts, ratio=0.25):
     and the user then downloads the same short twice. Survivors come back in
     transcript order, like ``trim_to_best``.
     """
-    def _score(c):
-        try:
-            return float(c.get("predicted_score") or 0)
-        except (TypeError, ValueError, AttributeError):
-            return 0.0
-
     def _span(c):
         try:
             return float(c.get("start", 0)), float(c.get("end", 0))
@@ -310,7 +589,7 @@ def dedupe_overlapping(shorts, ratio=0.25):
 
     indexed = list(enumerate(shorts))
     kept = []
-    for idx, clip in sorted(indexed, key=lambda p: (-_score(p[1]), p[0])):
+    for idx, clip in sorted(indexed, key=lambda p: (tuple(-x for x in clip_rank(p[1])), p[0])):
         s, e = _span(clip)
         clash = False
         for _, other in kept:

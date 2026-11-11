@@ -11,7 +11,12 @@ dashboard directly on Linux (including aarch64) and on Windows.
    python3.11 -m venv .venv && . .venv/bin/activate
    pip install torch --index-url https://download.pytorch.org/whl/cpu
    pip install -r requirements.txt
+   pip install -U "yt-dlp[default]"
    ```
+   `yt-dlp[default]` brings `yt-dlp-ejs`, the challenge solver. Without it
+   YouTube answers "n challenge solving failed" / "No video formats found"
+   (the Docker image installs it the same way).
+
    Do not use `requirements-cpu.lock`: it is built for x86_64.
    Verified on aarch64, CPU only, Python 3.11: with torch 2.11 from the CPU
    index, every pin in `requirements.txt` installed unchanged (`mediapipe
@@ -32,6 +37,7 @@ Docker image; native runs use the system `ffmpeg` as is.
    py -3.11 -m venv .venv; .\.venv\Scripts\Activate.ps1
    pip install torch --index-url https://download.pytorch.org/whl/cpu
    pip install -r requirements.txt
+   pip install -U "yt-dlp[default]"   # challenge solver, see the Linux notes
    ```
 3. Environment (or put the same keys in `.env`):
    ```powershell
@@ -49,6 +55,15 @@ The test suite runs on `windows-latest` in CI.
 ## Sizing for small machines (2 cores, no GPU)
 
 Set `MAX_CONCURRENT_JOBS=1` and `WHISPER_MODEL=small` or `base`.
+
+## Voice activity detection
+
+Whisper runs with faster-whisper's bundled silero VAD (`WHISPER_VAD=0` turns it
+off, `WHISPER_VAD_MIN_SILENCE_MS` sets its silence gap). It needs `onnxruntime`,
+a faster-whisper dependency: checked on Linux aarch64 (faster-whisper 1.2.1,
+onnxruntime 1.31). On Windows and Windows-on-ARM the wheel is installed by pip
+the same way; if no wheel exists for your interpreter, set `WHISPER_VAD=0`
+(music and noise may then come back as stray words).
 
 ## Smoke test
 

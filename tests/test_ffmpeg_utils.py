@@ -21,6 +21,7 @@ from ffmpeg_utils import (
 @pytest.fixture(autouse=True)
 def _clean_encoder_state(monkeypatch):
     monkeypatch.delenv("FFMPEG_ENCODER", raising=False)
+    monkeypatch.delenv("X264_PRESET", raising=False)
     monkeypatch.setattr(ffmpeg_utils, "_gpu_cut_sources", {})
     reset_encoder_cache()
     yield
@@ -34,6 +35,15 @@ def test_default_args_pin_historical_x264_settings():
         "-c:v", "libx264", "-preset", "fast", "-crf", "18"]
     assert video_encode_args(DELIVERY) == [
         "-c:v", "libx264", "-preset", "fast", "-crf", "22"]
+
+
+def test_x264_preset_env_overrides_every_tier_and_ignores_junk(monkeypatch):
+    monkeypatch.setenv("X264_PRESET", "VeryFast")
+    assert video_encode_args(QUALITY) == [
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18"]
+    assert video_encode_args(DELIVERY)[3] == "veryfast"
+    monkeypatch.setenv("X264_PRESET", "fast; rm -rf /")
+    assert video_encode_args(QUALITY)[3] == "medium"
 
 
 def test_unknown_tier_raises():
