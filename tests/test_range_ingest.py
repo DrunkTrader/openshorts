@@ -90,12 +90,6 @@ def test_record_source_for_a_whole_video_adds_nothing_else():
     assert meta == {"source_video": "Talk.mp4"}
 
 
-def test_no_speech_falls_back_to_the_full_download_only_in_range_mode():
-    assert range_ingest.full_download_fallback(True, None, lambda: ("v.mp4", "T")) == ("v.mp4", "T")
-    assert range_ingest.full_download_fallback(True, {"segments": []}, lambda: 1 / 0) is None
-    assert range_ingest.full_download_fallback(False, None, lambda: 1 / 0) is None
-
-
 def test_cleanup_is_called_with_audio_sidecar_and_keeps_pieces(tmp_path):
     for name in ("T.audio.m4a", "T.pieces.json", "T.piece_1.mp4"):
         (tmp_path / name).write_bytes(b"x")

@@ -97,13 +97,3 @@ def record_source(clips_data, input_video, pieces, url=None, duration=None, rang
     if range_mode:
         clips_data['source_url'] = url
         clips_data['source_duration'] = duration
-
-
-def full_download_fallback(range_mode, transcript, download_full):
-    """Range mode needs words to pick moments. Without them (sparse speech,
-    no audio) the legacy path, which watches the video, takes over:
-    ``(video, title)`` from ``download_full()``, or None when not needed."""
-    if range_mode and transcript is None:
-        print("↩️ No usable speech: falling back to the full download.")
-        return download_full()
-    return None
