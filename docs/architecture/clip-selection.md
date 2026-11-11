@@ -33,8 +33,9 @@ their own timestamps, because Whisper stretches a segment across a pause).
 between the stretches, so none spans one; for a source with no stretch it is
 exactly `build_transcript_windows`) plus `kind="nonspeech"` windows
 (`window_ns_001`, at most the window size, no `text`) over each silent stretch.
-Whisper runs with the bundled VAD (`WHISPER_VAD=0` turns it off), so music and
-noise do not come back as stray words.
+Whisper already ran with the bundled VAD (`vad_filter` was on); this adds the
+`WHISPER_VAD=0` switch and `WHISPER_VAD_MIN_SILENCE_MS`. Transcripts of normal
+speech are unchanged.
 
 - Non-speech windows never reach the LLM. `silent_signals.score_nonspeech` ranks
   them in code: percentile within the group of `0.6 * heat_pct + 0.4 * energy_pct`
@@ -42,17 +43,36 @@ noise do not come back as stray words.
   energy from `active_speaker.audio_envelope` at 1 s. A window with neither signal
   is skipped: no random clips.
 - One ranking: speech windows keep their LLM score (and the heat blend), each
-  group becomes a within-group percentile and the shortlist is the global top N
-  over both (`merge_rankings`). Never "up to K per group".
+  group becomes a within-group percentile (`1 - (i + .5) / len`) and the shortlist
+  is the global top N over both (`merge_rankings`). A rank-only percentile starves
+  a small group (a lone silent stretch is always 0.5), so a group with a window
+  above its own bar is reserved `max(1, round(N * its share of all windows))`
+  slots, taken from the windows that pass; the rest go by global percentile and
+  the reserved slots never exceed N. Bars: a speech window needs an LLM score of
+  at least `SILENT_SPEECH_MIN_SCORE` (50); a non-speech window needs a loudest
+  second at or above the `SILENT_BAR_PERCENTILE` (90) of the job's WHOLE energy
+  curve (not of the silent windows), or a replay heat of 0.5. A group with nothing
+  above its bar gets no reserved slot. This is not a per-batch K: the ranking is
+  still one list over every window, the shortlist is N whenever N windows exist,
+  and the reservation is a floor of representation for a group with evidence, not
+  a cap on anyone. The `min_clips` floor stays in code.
+- Every window gets a `rank_score` (0-1) from the merged order and every clip
+  carries its window's. `dedupe_overlapping` and `trim_to_best` compare clips on
+  `(rank_score, predicted_score)`, so a speech clip (LLM 70-95) and a silent clip
+  (code-made) are compared on the merged ranking; `predicted_score` is display
+  only. A clip with an unknown window id is held to the nearest window.
 - A non-speech clip is cut in code (`cut_from_peak`): 4 s before the loudest
   second, ending 1.5 s after the energy first drops under 35% of the peak, in the
   clip band and inside the window. It then goes through the same bound, snap,
   dedupe and `min_clips` floor as every clip; under the floor, the next-ranked
   non-speech windows are cut in code (no call).
 - Copy is text only, one call for every silent clip of the job
-  (`SILENT_COPY_PROMPT_TEMPLATE`: video title, chapter at that time, the last 300
-  characters spoken, length). No frame or video, so a local LLM serves it; a failed
-  call leaves generic copy from the chapter or title and keeps the clip.
+  (`SILENT_COPY_PROMPT_TEMPLATE`: video title, chapter at that time, up to 300
+  characters spoken within the 120 s before the clip (none if there are none),
+  length). No frame or video, so a local LLM serves it; a failed
+  call leaves generic copy (chapter or title plus the timestamp, never a bare
+  "Highlight") and keeps the clip. The early-audio path passes the title and
+  chapters too; replay heat is range jobs only.
 - Cut density from scene detection is not a signal: with audio-first there is no
   video at selection time. Windows carry `cut_density: None`.
 - Fully silent jobs store the transcript as `{"language": "none", "segments": []}`.
