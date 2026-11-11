@@ -310,3 +310,52 @@ def run_ffmpeg(command, timeout=1800):
 
 def basename_safe(name):
     return os.path.basename(str(name or "").replace("\\", "/")) or "upload"
+
+
+def perform_split(*, source_path, segments, spec, uploads, output_dir, clean_name,
+                  out_size, captions_transcript=None, captioner=None,
+                  face_centre_fn=None, runner=None):
+    """Render a slot split. Returns (served_filename, clean_filename).
+
+    ``source_path``/``segments``: the source and the times ON THAT FILE (the
+    caller rebases). ``uploads``: id -> {path, width, height, has_audio}.
+    ``out_size``: (w, h), the job's delivery size. Naming follows
+    recut.perform_recut (``recut_<ts>_<hex>_<clean>``) so the walk-backs that
+    resolve a clip's newest derivative keep working; captions are burned last
+    onto a ``subtitled_`` derivative, leaving the clean file clean.
+    """
+    import time
+    import uuid
+    import recut
+
+    run = runner or run_ffmpeg
+    out_w, out_h = out_size
+    duration = recut.total_duration(segments)
+    out_name = f"recut_{int(time.time())}_{uuid.uuid4().hex[:6]}_{clean_name}"
+    out_path = os.path.join(output_dir, out_name)
+    cut_path = os.path.join(output_dir, f"temp_{out_name}")
+    try:
+        recut.run_cut_concat(source_path, segments, cut_path, output_dir, runner=runner)
+        src_w, src_h, _d, has_audio = probe_video(cut_path)
+        centre = (src_w / 2.0, src_h * 0.4)
+        if "source" in (spec["top"]["kind"], spec["bottom"]["kind"]):
+            centre = (face_centre_fn or estimate_face_centre)(cut_path, src_w, src_h)
+        cmd = build_command(
+            spec, cut_path, out_path,
+            {i: u["path"] for i, u in uploads.items()},
+            {i: (u["width"], u["height"]) for i, u in uploads.items()},
+            src_w, src_h, out_w, out_h, duration, centre, source_has_audio=has_audio)
+        run(cmd)
+        write_layout(out_path, duration, out_h, spec["ratio"])
+        served = out_name
+        if captions_transcript and captions_transcript.get("segments"):
+            if captioner is None:
+                import main
+                captioner = main.auto_caption_clip
+            captioned = captioner(out_path, captions_transcript, 0.0, duration)
+            if captioned:
+                served = os.path.basename(captioned)
+        return served, out_name
+    finally:
+        if os.path.exists(cut_path):
+            os.remove(cut_path)
