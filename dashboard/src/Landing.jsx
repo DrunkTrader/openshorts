@@ -731,8 +731,8 @@ export default function Landing({ onLaunchApp }) {
           </SectionHeader>
           <FeatureShowcase />
           <details className="mt-12 group">
-            <summary className="list-none cursor-pointer text-sm text-muted hover:text-ink lowercase [&::-webkit-details-marker]:hidden">
-              the full feature list <ChevronDown size={14} className="inline transition-transform group-open:rotate-180" />
+            <summary className="list-none cursor-pointer text-sm text-muted hover:text-ink lowercase [&::-webkit-details-marker]:hidden flex items-center justify-between gap-2 sm:inline-flex">
+              the full feature list <ChevronDown size={14} className="shrink-0 transition-transform group-open:rotate-180" />
             </summary>
             <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5 mt-6">
               {features.map((feature, i) => (
