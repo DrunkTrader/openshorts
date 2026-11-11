@@ -2,8 +2,9 @@ import clip_selection as cs
 
 
 def _seg(a, b, n=40):
+    step = (b - a) / n
     return {"start": a, "end": b, "text": " ".join(f"w{i}" for i in range(n)),
-            "words": [{"word": "w", "start": a, "end": a + 0.2}]}
+            "words": [{"word": f"w{i}", "start": a + i * step, "end": a + (i + 0.8) * step} for i in range(n)]}
 
 
 def _talk(a, b):
@@ -54,3 +55,14 @@ def test_stray_words_in_a_silent_stretch_do_not_make_a_speech_window():
     ws = cs.build_timeline_windows(tr, 360)
     assert not any(w["start"] == 150 for w in ws if w.get("kind") != "nonspeech")
     assert any(w.get("kind") == "nonspeech" for w in ws)
+
+
+def test_segment_stretched_across_a_pause_is_split_by_word_timestamps():
+    # Whisper let one segment run 60 -> 155 s although its words end at 70 s
+    words = [{"word": f"w{i}", "start": 60 + i * 0.5, "end": 60.4 + i * 0.5} for i in range(20)]
+    stretched = {"start": 60.0, "end": 155.0, "text": " ".join(w["word"] for w in words), "words": words}
+    tr = _tr(_talk(0, 60), [stretched], _talk(155, 215))
+    assert cs.silent_stretches(tr, 215)[0][0] <= 90
+    ws = cs.build_timeline_windows(tr, 215)
+    assert max(w["end"] for w in ws if w.get("kind") != "nonspeech" and w["start"] < 100) <= 70.5
+    assert [w for w in ws if w.get("kind") == "nonspeech"]

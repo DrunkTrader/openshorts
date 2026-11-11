@@ -283,21 +283,37 @@ def build_transcript_windows(transcript_result, video_duration,
     return windows
 
 
+def _word_spans(transcript_result):
+    """``[(start, end, n_words)]``: one span per timed word when the segment has
+    word timestamps (Whisper stretches a segment's end across a long pause, so
+    the segment alone would smear its words over the silence), else the segment."""
+    out = []
+    for g in (transcript_result or {}).get("segments", []):
+        timed = [w for w in g.get("words") or []
+                 if isinstance(w, dict) and w.get("start") is not None and w.get("end") is not None]
+        if timed:
+            out.extend((float(w["start"]), float(w["end"]), 1) for w in timed)
+        else:
+            n = len(str(g.get("text") or "").split())
+            if n:
+                out.append((float(g.get("start", 0)), float(g.get("end", 0)), n))
+    return out
+
+
 def speech_density(transcript_result, video_duration, stretch=30.0):
     """``[(start, end, words_per_min)]`` over the whole timeline in ``stretch``
-    steps (the last one may be shorter). A segment's words spread over its
-    duration, so a transcript without word timestamps still counts."""
+    steps (the last one may be shorter). Words are counted from their own
+    timestamps; a segment without them spreads its words over its duration."""
     duration = float(video_duration or 0)
-    segs = [(float(g.get("start", 0)), float(g.get("end", 0)), len(str(g.get("text") or "").split()))
-            for g in (transcript_result or {}).get("segments", [])]
+    spans = _word_spans(transcript_result)
     out, a = [], 0.0
     while a < duration - 1e-6:
         b = min(a + stretch, duration)
         words = 0.0
-        for s, e, n in segs:
-            if n and e > s:
+        for s, e, n in spans:
+            if e > s:
                 words += n * max(0.0, min(e, b) - max(s, a)) / (e - s)
-            elif n and a <= s < b:
+            elif a <= s < b:
                 words += n
         out.append((round(a, 3), round(b, 3), words / ((b - a) / 60.0)))
         a = b
@@ -319,25 +335,63 @@ def silent_stretches(transcript_result, video_duration, min_len=30.0, max_wpm=5.
     return [r for r in runs if r[1] - r[0] >= min_len - 1e-6]
 
 
+def _split_at_gaps(transcript_result, gap=10.0):
+    """Segments cut where two consecutive words are ``gap`` s or more apart, and
+    trimmed to their words when Whisper stretched an edge across a pause, so a
+    pause never rides inside a speech window. Segments without word timestamps
+    pass through."""
+    segs = []
+    for g in (transcript_result or {}).get("segments", []):
+        words = [w for w in g.get("words") or []
+                 if isinstance(w, dict) and w.get("start") is not None and w.get("end") is not None]
+        if not words:
+            segs.append(g)
+            continue
+        cut = [0] + [i for i in range(1, len(words))
+                     if float(words[i]["start"]) - float(words[i - 1]["end"]) >= gap] + [len(words)]
+        for a, b in zip(cut, cut[1:]):
+            part = words[a:b]
+            s0, e0 = float(g.get("start", 0)), float(g.get("end", 0))
+            s1, e1 = float(part[0]["start"]), float(part[-1]["end"])
+            start = s1 if (a > 0 or s1 - s0 >= gap) else s0
+            end = e1 if (b < len(words) or e0 - e1 >= gap) else e0
+            if len(cut) == 2 and (start, end) == (s0, e0):
+                segs.append(g)
+            else:
+                segs.append({**g, "words": part, "start": start, "end": end,
+                             "text": "".join(w.get("word", "") for w in part).strip()})
+    return {**(transcript_result or {}), "segments": segs}
+
+
 def build_timeline_windows(transcript_result, video_duration, signals=None,
                            window_seconds=90, overlap_seconds=30):
     """Windows over the whole timeline: the speech windows of
     ``build_transcript_windows`` (unchanged) plus ``kind="nonspeech"`` windows
     (``window_ns_001``, at most ``window_seconds``, no ``text``) over silent
     stretches of 30 s or more, with their signals attached
-    (``silent_signals.window_signals``). A speech window that lies inside a
-    silent stretch (stray words, not speech) is dropped. Silent windows are not
-    ranked here; ``silent_signals.score_nonspeech`` does that."""
+    (``silent_signals.window_signals``). With silent stretches, speech windows
+    are built per island of speech between them (stray words inside a stretch
+    make none), ids renumbered. Silent windows are not ranked here; ``silent_signals.score_nonspeech`` does that."""
     import silent_signals
 
-    has_text = any(str(g.get("text") or "").strip() for g in (transcript_result or {}).get("segments", []))
-    speech = build_transcript_windows(transcript_result, video_duration,
-                                      window_seconds, overlap_seconds) if has_text else []
     stretches = silent_stretches(transcript_result, video_duration)
     if not stretches:
-        return speech
-    speech = [w for w in speech
-              if not any(a - 1e-3 <= w["start"] and w["end"] <= b + 1e-3 for a, b in stretches)]
+        has_text = any(str(g.get("text") or "").strip() for g in (transcript_result or {}).get("segments", []))
+        return build_transcript_windows(transcript_result, video_duration,
+                                        window_seconds, overlap_seconds) if has_text else []
+    # Speech windows are built per island of speech between the silent stretches,
+    # so none of them spans a stretch (stray words inside one belong to no island).
+    segs = _split_at_gaps(transcript_result)["segments"]
+    bounds = [0.0] + [t for a, b in stretches for t in (a, b)] + [float(video_duration)]
+    speech = []
+    for lo, hi in zip(bounds[0::2], bounds[1::2]):
+        island = [g for g in segs if str(g.get("text") or "").strip()
+                  and lo <= (float(g.get("start", 0)) + float(g.get("end", 0))) / 2 < hi]
+        if island:
+            speech += build_transcript_windows({**transcript_result, "segments": island}, hi,
+                                               window_seconds, overlap_seconds)
+    for i, w in enumerate(speech, 1):
+        w["id"] = f"window_{i:03d}"
     silent = []
     for a, b in stretches:
         n = max(1, math.ceil((b - a) / window_seconds - 1e-9))

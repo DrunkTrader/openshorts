@@ -129,4 +129,4 @@ def cut_from_peak(window, curve, min_s, max_s, step=ENERGY_STEP):
             "source_window_id": window["id"], "kind": "nonspeech",
             "video_title_for_youtube_short": None, "viral_hook_text": None,
             "video_description_for_tiktok": None, "video_description_for_instagram": None,
-            "why": ""}
+            "why": "Loudest or most replayed moment of a stretch without speech"}
