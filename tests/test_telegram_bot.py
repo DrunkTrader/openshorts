@@ -10,7 +10,7 @@ import pytest
 
 import telegram_bot as tb
 
-TOKEN = "123456789:AAFakeTokenForTestsOnly_abcdefghijklmnopq"
+TOKEN = "11:fake_token_for_tests"
 CHAT = 42
 API = "http://127.0.0.1:9"
 
@@ -335,4 +335,4 @@ def test_token_never_in_logs_or_errors(tmp_path, caplog, capsys):
     out = capsys.readouterr()
     text = caplog.text + out.out + out.err
     assert "polling error" in text and "telegram sendMessage failed" in text
-    assert TOKEN not in text and TOKEN.split(":")[1] not in text
+    assert TOKEN not in text and "fake_token_for_tests" not in text
