@@ -24,14 +24,44 @@ Two invariants keep that chain from leaking:
 `target_clips` on `/api/process` (dashboard: advanced options) pins both ends via
 `CLIP_TARGET_MIN` / `CLIP_TARGET_MAX` when the user wants an exact number.
 
-## Silent footage: the vision fallback (`main.get_visual_clips`)
+## Silent and mixed footage (`silent_signals.py`, `silent_copy.py`, `main.select_clips`)
 
-`transcribe_video` raising `NoAudioError`, **or** `speech_is_sparse()` returning
-true, both set `transcript = None` and route to `get_visual_clips`. Sparse means
-under `MIN_SPEECH_WORDS` (8) in total or under `MIN_SPEECH_WORDS_PER_MIN` (5).
-Music-only footage and mic-muted recordings transcribe to a handful of stray
-words; without the second test the picker scores those words and cuts around
-them.
+Speech is judged per 30 s stretch, not per video (`clip_selection.speech_density`,
+`silent_stretches`: runs of at least 30 s at or under 5 words/min; words count at
+their own timestamps, because Whisper stretches a segment across a pause).
+`build_timeline_windows` returns the speech windows (built per island of speech
+between the stretches, so none spans one; for a source with no stretch it is
+exactly `build_transcript_windows`) plus `kind="nonspeech"` windows
+(`window_ns_001`, at most the window size, no `text`) over each silent stretch.
+Whisper runs with the bundled VAD (`WHISPER_VAD=0` turns it off), so music and
+noise do not come back as stray words.
+
+- Non-speech windows never reach the LLM. `silent_signals.score_nonspeech` ranks
+  them in code: percentile within the group of `0.6 * heat_pct + 0.4 * energy_pct`
+  (`SILENT_HEAT_WEIGHT` / `SILENT_ENERGY_WEIGHT`), heat from the replay heatmap,
+  energy from `active_speaker.audio_envelope` at 1 s. A window with neither signal
+  is skipped: no random clips.
+- One ranking: speech windows keep their LLM score (and the heat blend), each
+  group becomes a within-group percentile and the shortlist is the global top N
+  over both (`merge_rankings`). Never "up to K per group".
+- A non-speech clip is cut in code (`cut_from_peak`): 4 s before the loudest
+  second, ending 1.5 s after the energy first drops under 35% of the peak, in the
+  clip band and inside the window. It then goes through the same bound, snap,
+  dedupe and `min_clips` floor as every clip; under the floor, the next-ranked
+  non-speech windows are cut in code (no call).
+- Copy is text only, one call for every silent clip of the job
+  (`SILENT_COPY_PROMPT_TEMPLATE`: video title, chapter at that time, the last 300
+  characters spoken, length). No frame or video, so a local LLM serves it; a failed
+  call leaves generic copy from the chapter or title and keeps the clip.
+- Cut density from scene detection is not a signal: with audio-first there is no
+  video at selection time. Windows carry `cut_density: None`.
+- Fully silent jobs store the transcript as `{"language": "none", "segments": []}`.
+- Vision is the last resort: `select_clips` calls `get_visual_clips` only when no
+  window survives AND the speech is sparse (or there is no audio track), it needs
+  `GEMINI_API_KEY` and a full video (range jobs do a logged full download). Without
+  a key the job fails saying a text-only server cannot see the footage.
+
+## Silent footage: the vision fallback (`main.get_visual_clips`)
 
 The vision pass uploads the video, Gemini returns the same `{"shorts"}` shape
 (`gemini_worker.VisualResponse`) in the same 15-60 s band, so every later stage
