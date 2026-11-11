@@ -1,53 +1,95 @@
-/* Hallmark · genre: atmospheric · theme: lumen (night foundry) · design-system: design.md · designed-as-app
- * macrostructure: Marquee Hero (marketing) / Workbench (app) / Long Document (content)
- * nav: N9 edge-aligned · footer: Ft5 statement · enrichment: filament apparatus (landing only)
- * pre-emit critique: P5 H4 E4 S5 R5 V4
- */
+/* Design tokens. Light is the default; dark is `html[data-theme="dark"]`, set
+ * before first paint by the inline script in index.html (see lib/theme.js).
+ *
+ * Colours are stored as bare OKLCH channels (--c-*) so Tailwind can compose
+ * alpha (`bg-brass/10`); the --color-* aliases are ready-to-use values.
+ * Warm greys, true-black ink, ONE accent (ember orange, hue ~40-50). */
 
 :root {
-  /* paper */
-  --color-paper: oklch(13% 0.014 265);
-  --color-paper-2: oklch(16.5% 0.015 265);
-  --color-paper-3: oklch(20% 0.016 265);
+  color-scheme: light;
 
+  /* surfaces: page, raised card, sunken/hover */
+  --c-paper: 98.1% 0.003 85;      /* ~#FAF9F7 */
+  --c-paper-2: 100% 0 0;          /* #FFFFFF */
+  --c-paper-3: 95.6% 0.004 85;
   /* ink */
-  --color-ink: oklch(96% 0.006 262);
-  --color-ink-2: oklch(86% 0.01 262);
-  --color-muted: oklch(64% 0.012 262);
+  --c-ink: 14.5% 0 0;             /* ~#0A0A0A */
+  --c-ink-2: 33% 0.006 85;
+  --c-muted: 45% 0.008 85;        /* ~#5F5E5A, >=6:1 on every surface */
+  --c-rule: 14.5% 0 0 / 0.07;
+  --c-rule-2: 14.5% 0 0 / 0.14;
+  /* accent: deep ember so it carries text at AA on white and paper */
+  --c-accent: 52% 0.18 40;
+  --c-accent-ink: 100% 0 0;
+  --c-accent-2: 52% 0.18 40;      /* legacy "coral": same single accent */
+  /* states (text-safe) */
+  --c-ok: 46% 0.11 150;
+  --c-danger: 52% 0.2 25;
+  --c-warn: 50% 0.12 75;
 
-  /* rules */
-  --color-rule: oklch(96% 0.006 262 / 0.08);
-  --color-rule-2: oklch(96% 0.006 262 / 0.14);
-  --rule-blueprint: oklch(96% 0.006 262 / 0.04);
+  --color-paper: oklch(var(--c-paper));
+  --color-paper-2: oklch(var(--c-paper-2));
+  --color-paper-3: oklch(var(--c-paper-3));
+  --color-ink: oklch(var(--c-ink));
+  --color-ink-2: oklch(var(--c-ink-2));
+  --color-muted: oklch(var(--c-muted));
+  --color-rule: oklch(var(--c-rule));
+  --color-rule-2: oklch(var(--c-rule-2));
+  --rule-blueprint: oklch(var(--c-rule) / 0.5);
+  --color-accent: oklch(var(--c-accent));
+  --color-accent-ink: oklch(var(--c-accent-ink));
+  --color-accent-2: oklch(var(--c-accent-2));
+  --color-glow: oklch(var(--c-accent) / 0.25);
+  --color-paper-emit: oklch(var(--c-accent) / 0.025);
+  --color-focus: oklch(var(--c-accent));
+  --color-ok: oklch(var(--c-ok));
+  --color-danger: oklch(var(--c-danger));
+  --color-warn: oklch(var(--c-warn));
 
-  /* accents */
-  --color-accent: oklch(76% 0.17 50);
-  --color-accent-ink: oklch(17% 0.03 50);
-  --color-accent-2: oklch(68% 0.16 18);
-  --color-glow: oklch(80% 0.16 50 / 0.42);
-  --color-paper-emit: oklch(76% 0.17 50 / 0.04);
-  --color-focus: oklch(76% 0.17 50);
-
-  /* states */
-  --color-ok: oklch(75% 0.11 150);
-  --color-danger: oklch(66% 0.18 25);
-  --color-warn: oklch(78% 0.14 75);
+  /* soft shadows over heavy borders */
+  --shadow-card: 0 1px 2px oklch(20% 0.01 85 / 0.05), 0 8px 24px -12px oklch(20% 0.01 85 / 0.12);
+  --shadow-pop: 0 2px 4px oklch(20% 0.01 85 / 0.06), 0 18px 48px -12px oklch(20% 0.01 85 / 0.22);
 
   /* type */
-  --font-display: "Instrument Serif", ui-serif, Georgia, serif;
-  --font-body: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-display: "Instrument Serif", "Instrument Serif Fallback", ui-serif, Georgia, serif;
+  --font-body: "Geist", "Geist Fallback", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "JetBrains Mono Fallback", ui-monospace, SFMono-Regular, monospace;
   --text-display: clamp(3rem, 6vw + 1rem, 6rem);
-  --tracking-display: -0.032em;
-  --tracking-micro: 0.10em;
+  --tracking-display: -0.018em;
+  --tracking-micro: 0.08em;
+  --leading-body: 1.6;
 
-  /* geometry */
-  --radius-card: 10px;
-  --radius-input: 8px;
+  /* geometry scale */
+  --radius-sm: 8px;
+  --radius-input: 12px;
+  --radius-card: 20px;
+  --radius-pill: 999px;
 
-  /* motion */
+  /* motion: 150-250 ms, ease-out */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --dur-short: 220ms;
-  --dur-reveal: 600ms;
+  --dur-short: 180ms;
+  --dur-reveal: 240ms;
   --dur-pulse: 4s;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --c-paper: 13.5% 0.002 85;      /* ~#0B0B0C */
+  --c-paper-2: 17.4% 0.003 85;    /* ~#141415 */
+  --c-paper-3: 22% 0.004 85;
+  --c-ink: 96.5% 0.005 90;        /* ~#F5F4F0 */
+  --c-ink-2: 86% 0.006 90;
+  --c-muted: 68% 0.008 85;
+  --c-rule: 96.5% 0.005 90 / 0.08;
+  --c-rule-2: 96.5% 0.005 90 / 0.15;
+  --c-accent: 74% 0.16 48;        /* same hue, lightened */
+  --c-accent-ink: 17% 0.03 48;
+  --c-accent-2: 74% 0.16 48;
+  --c-ok: 76% 0.12 150;
+  --c-danger: 70% 0.17 25;
+  --c-warn: 80% 0.14 80;
+  --color-paper-emit: oklch(var(--c-accent) / 0.04);
+  --color-glow: oklch(var(--c-accent) / 0.35);
+  --shadow-card: 0 1px 0 oklch(100% 0 0 / 0.03) inset, 0 12px 32px -16px oklch(0% 0 0 / 0.6);
+  --shadow-pop: 0 1px 0 oklch(100% 0 0 / 0.04) inset, 0 24px 60px -12px oklch(0% 0 0 / 0.75);
 }

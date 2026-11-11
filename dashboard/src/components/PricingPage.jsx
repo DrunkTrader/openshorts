@@ -155,7 +155,7 @@ export default function PricingPage({ onRequireLogin }) {
   return (
     <div className="min-h-screen bg-paper text-ink2 animate-fade">
       {/* Header */}
-      <header className="px-6 pt-20 pb-12">
+      <div className="px-6 pt-20 pb-12">
         <div className="max-w-6xl mx-auto text-center">
           <p className="eyebrow mb-5">Pricing</p>
           <h1 className="font-display lowercase text-ink tracking-tight text-4xl md:text-6xl leading-[1.02] mb-5">
@@ -163,7 +163,7 @@ export default function PricingPage({ onRequireLogin }) {
           </h1>
           <p className="readout">first video free (up to 60 min) · then 20 min/month · no credit card</p>
         </div>
-      </header>
+      </div>
 
       {/* Demo proof strip */}
       <section className="px-6 pb-16">
@@ -189,6 +189,7 @@ export default function PricingPage({ onRequireLogin }) {
       {/* Pricing grid */}
       <section id="pricing-plans" className="px-6 py-16 border-t border-rule scroll-mt-8">
         <div className="max-w-6xl mx-auto">
+          <h2 className="sr-only">Plans</h2>
           <PricingSection onRequireLogin={onRequireLogin} />
         </div>
       </section>

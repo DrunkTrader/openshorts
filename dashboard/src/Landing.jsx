@@ -2,6 +2,7 @@ import React from 'react';
 import { Sparkles, Zap, Globe, FileVideo, Subtitles, Youtube, Instagram, Shield, Github, ArrowRight, Check, ChevronDown, Monitor, Cpu, Languages, Type, Upload, Scissors, Link2, Bot } from 'lucide-react';
 import PricingSection from './components/PricingSection';
 import SiteNav from './components/SiteNav';
+import SkipLink from './components/ui/SkipLink';
 import { useAuth } from './contexts/AuthContext';
 import './landing.css';
 
@@ -568,7 +569,10 @@ export default function Landing({ onLaunchApp }) {
   return (
     <div className="min-h-screen bg-paper text-ink2 overflow-x-clip">
       {/* Navigation: the shared site nav (seo/nav.js), same items as every page */}
+      <SkipLink />
       <SiteNav className="fixed top-0 w-full z-50" />
+
+      <main tabIndex={-1} className="outline-none">
 
       {/* Hero — Marquee Hero: blueprint grid, content left, apparatus right */}
       <section className="hero-blueprint relative overflow-clip border-b border-rule pt-32 pb-20 px-6">
@@ -727,8 +731,8 @@ export default function Landing({ onLaunchApp }) {
           </SectionHeader>
           <FeatureShowcase />
           <details className="mt-12 group">
-            <summary className="list-none cursor-pointer text-sm text-muted hover:text-ink lowercase [&::-webkit-details-marker]:hidden">
-              the full feature list <ChevronDown size={14} className="inline transition-transform group-open:rotate-180" />
+            <summary className="list-none cursor-pointer text-sm text-muted hover:text-ink lowercase [&::-webkit-details-marker]:hidden flex items-center justify-between gap-2 sm:inline-flex">
+              the full feature list <ChevronDown size={14} className="shrink-0 transition-transform group-open:rotate-180" />
             </summary>
             <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5 mt-6">
               {features.map((feature, i) => (
@@ -910,7 +914,7 @@ export default function Landing({ onLaunchApp }) {
           <SectionHeader eyebrow="07 · Comparison" title="OpenShorts vs Opus Clip, Klap and Vizard">
             Hosted OpenShorts starts at $12/mo billed monthly, or self-host it free. Opus Clip starts at $15/month, Klap at $14 and Vizard at $14.50 a month on yearly billing, Kapwing at $24/month.
           </SectionHeader>
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto" role="region" tabIndex={0} aria-label="OpenShorts compared with Opus Clip, Kapwing and others">
             <table className="w-full">
               <thead>
                 <tr className="border-b border-rule2">
@@ -1178,10 +1182,12 @@ export default function Landing({ onLaunchApp }) {
           </div>
         </div>
       </section>
+      </main>
 
       {/* Floating CTA, the same form as the hero */}
       <form
         onSubmit={handleHeroSubmit}
+        aria-label="Quick start"
         aria-hidden={!stickyCta}
         className={`fixed z-40 bottom-4 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-xl flex items-center gap-2 p-2 rounded-full border border-rule bg-paper2/95 backdrop-blur shadow-2xl transition-all duration-300 ${stickyCta ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6 pointer-events-none'}`}
       >

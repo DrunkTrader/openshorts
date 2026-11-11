@@ -1,10 +1,14 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, LayoutDashboard, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket } from 'lucide-react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
+import { Upload, Sparkles, Youtube, Instagram, Share2, ChevronDown, Check, Activity, Scissors, Settings, Plus, History, X, Terminal, Shield, LayoutGrid, Image, Globe, RotateCcw, Calendar, AlertTriangle, KeyRound, Bot, Users, Smartphone, ExternalLink, Copy, CheckCircle2, Mail, Loader2, Download, Menu, Lock, Rocket } from 'lucide-react';
 import KeyInput from './components/KeyInput';
 import MediaInput from './components/MediaInput';
 import McpConnectCard from './components/McpConnectCard';
 import ResultCard from './components/ResultCard';
 import ProcessingAnimation from './components/ProcessingAnimation';
+import StatusChip from './components/StatusChip';
+import JobTimeline from './components/JobTimeline';
+import Skeleton from './components/ui/Skeleton';
+import { deriveStage } from './lib/jobStage';
 // import Gallery from './components/Gallery';
 import ThumbnailStudio from './components/ThumbnailStudio';
 import SaaShortsTab from './components/SaaShortsTab';
@@ -27,7 +31,11 @@ import AdvancedBanner from './components/AdvancedBanner';
 import HistoryTab from './components/HistoryTab';
 import AutopilotTab from './components/AutopilotTab';
 import ProfileMenu from './components/ProfileMenu';
+import Chip from './components/ui/Chip';
+import Button from './components/ui/Button';
+import ThemeToggle from './components/ui/ThemeToggle';
 import Modal from './components/ui/Modal';
+import { trapTab } from './lib/trapTab';
 import { useAuth } from './contexts/AuthContext';
 import { apiFetch, apiJson, QuotaError, QUOTA_WALL_EVENT } from './lib/api';
 import { track } from './lib/analytics';
@@ -364,11 +372,27 @@ function App() {
   const [logs, setLogs] = useState([]);
   // When each server log line arrived (epoch s, parallel to logs), from /api/status.
   const [logTimes, setLogTimes] = useState([]);
-  // Collapsed on phones: the log tail is the least useful thing on a 360px
-  // screen and it was pushing the actual clips a full scroll down.
-  const [logsVisible, setLogsVisible] = useState(() => {
-    try { return window.innerWidth >= 768; } catch { return true; }
-  });
+  // Server-side job state (queued | processing | completed | failed): the
+  // timeline needs it, the local `status` only knows processing/complete/error.
+  const [serverStatus, setServerStatus] = useState('queued');
+  // The last submitted request, so the error state can offer a real Retry.
+  const lastRequestRef = useRef(null);
+  // Phones: the source monitor of a settled job sits behind a disclosure.
+  const [showSource, setShowSource] = useState(false);
+  // Completion swaps the scroller (results panel -> page): carry the offset over.
+  const pageScrollRef = useRef(null);
+  const resultsPanelRef = useRef(null);
+  const resultsScrollTop = useRef(0);
+  useLayoutEffect(() => {
+    if (status === 'processing' || !pageScrollRef.current || !resultsPanelRef.current || !resultsScrollTop.current) return;
+    pageScrollRef.current.scrollTop = resultsPanelRef.current.offsetTop + resultsScrollTop.current;
+    resultsScrollTop.current = 0;
+  }, [status]);
+  const jobInfo = useMemo(() => deriveStage({
+    status: status === 'complete' ? 'completed' : status === 'error' ? 'failed' : serverStatus,
+    logs,
+    queue: queueInfo,
+  }), [status, serverStatus, logs, queueInfo]);
   const [processingMedia, setProcessingMedia] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard'); // dashboard, settings
   // Mobile only: the full nav lives in a drawer behind the header's menu button.
@@ -826,6 +850,7 @@ function App() {
           }
 
           if (data.partial) setPartialJob(data.partial);
+          setServerStatus(data.status);
           setQueueInfo(data.status === 'queued' && data.queue ? data.queue : null);
 
           if (data.status === 'completed') {
@@ -837,7 +862,10 @@ function App() {
             setStatus('error');
             const errorMsg = data.error || (data.logs && data.logs.length > 0 ? data.logs[data.logs.length - 1] : "Process failed");
             setJobError(readableError(errorMsg));
-            setLogs(prev => [...prev, "Error: " + errorMsg]);
+            // Keep the failing response's own lines: they place the stage and
+            // belong in Raw logs.
+            setLogs(data.logs?.length ? [...data.logs, "Error: " + errorMsg] : (prev => [...prev, "Error: " + errorMsg]));
+            if (data.logs?.length) setLogTimes(data.log_times || []);
             clearInterval(interval);
             refreshMe();
           } else {
@@ -1108,6 +1136,8 @@ function App() {
     }
     // Past every gate, so this request is really running: nothing left to resume.
     clearPendingJob();
+    lastRequestRef.current = { data, forceLowQuality };
+    setServerStatus('queued');
     setStatus('processing');
     setJobError('');
     setLogs(["Starting process..."]);
@@ -1287,7 +1317,7 @@ function App() {
   // drawer, and the bottom tab bar. `short` is the tab-bar label — the full one
   // wraps to two lines in a 5-up bar on a 360px phone.
   const navItems = [
-    { id: 'dashboard', ord: '01', icon: LayoutDashboard, label: 'Clip Generator', short: 'clips', primary: true },
+    { id: 'dashboard', ord: '01', icon: Scissors, label: 'Clip Generator', short: 'clips', primary: true },
     // Cloud only: it runs on the managed pipeline and the Upload-Post connection.
     ...(billingEnabled ? [{ id: 'autopilot', ord: '02', icon: Rocket, label: 'Autopilot', short: 'autopilot', isNew: true }] : []),
     { id: 'saasshorts', ord: '03', icon: Sparkles, label: 'AI Shorts', short: 'ai shorts', byok: true, primary: true },
@@ -1303,9 +1333,18 @@ function App() {
   // there is no body scroll to lock behind it.
   useEffect(() => {
     if (!navOpen) return;
-    const onKey = (e) => { if (e.key === 'Escape') setNavOpen(false); };
+    const opener = document.activeElement;
+    const drawer = document.getElementById('nav-drawer');
+    drawer?.focus();
+    const onKey = (e) => { if (e.key === 'Escape') setNavOpen(false); else trapTab(e, drawer); };
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      // The tab bar remounts while the drawer is open, so the original node may be
+      // gone: fall back to the control that opens the drawer.
+      const back = opener instanceof HTMLElement && document.contains(opener) ? opener : document.getElementById('more-sections-btn');
+      back?.focus();
+    };
   }, [navOpen]);
 
   const goToTab = (id) => {
@@ -1321,32 +1360,36 @@ function App() {
     <>
       <a
         href="#landing"
-        className="flex items-center gap-2 px-3 py-2 text-xs lowercase text-muted hover:text-ink2 transition-colors"
+        aria-label="Landing page"
+        className={`flex items-center gap-2 px-3 py-2 text-xs text-muted hover:text-ink transition-colors duration-150 rounded-input ${collapsed ? 'justify-center lg:justify-start' : ''}`}
       >
         <Globe size={14} className="shrink-0" />
-        <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>landing page</span>
+        <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>Landing page</span>
       </a>
       <a
         href="https://github.com/mutonby/openshorts"
         target="_blank"
         rel="noopener noreferrer"
-        className="flex items-center gap-2 px-3 py-2 text-xs lowercase text-muted hover:text-ink2 transition-colors"
+        aria-label="Open source on GitHub"
+        className={`flex items-center gap-2 px-3 py-2 text-xs text-muted hover:text-ink transition-colors duration-150 rounded-input ${collapsed ? 'justify-center lg:justify-start' : ''}`}
       >
         <svg height="14" viewBox="0 0 16 16" version="1.1" width="14" aria-hidden="true" fill="currentColor" className="shrink-0"><path fillRule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
-        <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>open source</span>
+        <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>Open source</span>
       </a>
       {billingEnabled && (
         <a
           href="#/pricing"
-          className="flex items-center gap-2 px-3 py-2 text-xs lowercase text-muted hover:text-ink2 transition-colors"
+          aria-label="Plans and pricing"
+          className={`flex items-center gap-2 px-3 py-2 text-xs text-muted hover:text-ink transition-colors duration-150 rounded-input ${collapsed ? 'justify-center lg:justify-start' : ''}`}
         >
           <Sparkles size={14} className="shrink-0" />
-          <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>plans &amp; pricing</span>
+          <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>Plans &amp; pricing</span>
         </a>
       )}
       <a
         href="mailto:info@openshorts.app"
-        className="flex items-center gap-2 px-3 py-2 text-xs lowercase text-muted hover:text-ink2 transition-colors"
+        aria-label="Email info@openshorts.app"
+        className={`flex items-center gap-2 px-3 py-2 text-xs text-muted hover:text-ink transition-colors duration-150 rounded-input ${collapsed ? 'justify-center lg:justify-start' : ''}`}
       >
         <Mail size={14} className="shrink-0" />
         <span className={collapsed ? 'hidden lg:block truncate' : 'truncate'}>info@openshorts.app</span>
@@ -1357,15 +1400,15 @@ function App() {
   // Desktop rail: icon-only from md, labelled from lg. Below md it is gone
   // entirely — an unlabelled 80px rail ate a fifth of a phone screen.
   const Sidebar = () => (
-    <div className="hidden md:flex w-20 lg:w-64 bg-paper2 border-r border-rule flex-col h-full shrink-0 transition-all duration-300">
-      <a href="#app" onClick={() => goToTab('dashboard')} className="p-6 flex items-center gap-3" title="openshorts home">
+    <aside aria-label="Sidebar" className="hidden md:flex w-16 lg:w-56 bg-paper2 border-r border-rule flex-col h-full shrink-0 transition-[width] duration-200 ease-out">
+      <a href="#app" onClick={() => goToTab('dashboard')} className="h-14 px-4 lg:px-5 flex items-center justify-center lg:justify-start gap-3 shrink-0" title="openshorts home" aria-label="openshorts home">
         <div className="w-8 h-8 bg-paper3 rounded-input flex items-center justify-center shrink-0 overflow-hidden border border-rule">
           <img src="/logo-openshorts.png" alt="Logo" className="w-full h-full object-cover" />
         </div>
         <span className="font-display lowercase text-lg text-ink hidden lg:block">openshorts</span>
       </a>
 
-      <nav className="flex-1 px-4 py-4 space-y-1">
+      <nav aria-label="Sections" className="flex-1 px-2.5 lg:px-3 py-2 space-y-0.5 overflow-y-auto custom-scrollbar">
         {navItems.map((item) => {
           const NavIcon = item.icon;
           const isActive = activeTab === item.id;
@@ -1375,34 +1418,36 @@ function App() {
               data-tutorial={item.id === 'dashboard' ? 'nav-clips' : undefined}
               onClick={() => goToTab(item.id)}
               title={tabLocked(item.id) ? 'Finish your first clips to unlock' : item.label}
+              aria-current={isActive ? 'page' : undefined}
               disabled={tabLocked(item.id)}
-              className={`relative w-full flex items-center gap-3 px-3 py-2.5 rounded-input transition-colors ${isActive ? 'bg-paper3 text-ink' : 'text-muted hover:text-ink2 hover:bg-paper3/50'} ${tabLocked(item.id) ? 'opacity-40 cursor-not-allowed hover:bg-transparent hover:text-muted' : ''}`}
+              className={`relative w-full flex items-center justify-center lg:justify-start gap-3 px-3 py-2.5 rounded-input transition-colors duration-150 ${isActive ? 'bg-paper3 text-ink' : 'text-muted hover:text-ink2 hover:bg-paper3/50'} ${tabLocked(item.id) ? 'opacity-40 cursor-not-allowed hover:bg-transparent hover:text-muted' : ''}`}
             >
               {isActive && (
                 <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 bg-brass rounded-full" aria-hidden="true" />
               )}
-              <NavIcon size={18} className={`shrink-0 ${isActive ? 'text-brass' : ''}`} />
-              <span className="text-sm lowercase hidden lg:block flex-1 text-left truncate">{item.label}</span>
+              <NavIcon size={18} className="shrink-0" />
+              <span className="text-sm sr-only lg:not-sr-only lg:block flex-1 text-left truncate">{item.label}</span>
               {tabLocked(item.id)
                 ? <Lock size={12} className="shrink-0 hidden lg:block" />
-                : item.byok ? <span className="readout hidden lg:block">BYOK</span>
-                  : item.isNew ? <span className="badge-brass hidden lg:block">new</span> : null}
-              <span className="readout hidden lg:block">{item.ord}</span>
+                : item.byok ? <Chip className="hidden lg:inline-flex">BYOK</Chip>
+                  : item.isNew ? <Chip tone="accent" className="hidden lg:inline-flex">new</Chip> : null}
             </button>
           );
         })}
       </nav>
 
-      <div className="p-4 border-t border-rule space-y-1">
-        <NavFooterLinks collapsed />
+      <div className="p-2.5 lg:p-3 border-t border-rule space-y-0.5">
+        {NavFooterLinks({ collapsed: true })}
       </div>
-    </div>
+    </aside>
   );
 
   // Mobile drawer: the complete nav, reachable from the header's menu button.
   const MobileNavDrawer = () => (
     <div
-      className="md:hidden fixed inset-0 z-[90] flex"
+      id="nav-drawer"
+      tabIndex={-1}
+      className="md:hidden fixed inset-0 z-[90] flex outline-none"
       role="dialog"
       aria-modal="true"
       aria-label="Navigation"
@@ -1429,7 +1474,7 @@ function App() {
           </button>
         </div>
 
-        <nav className="flex-1 overflow-y-auto custom-scrollbar px-3 py-3 space-y-1">
+        <nav aria-label="All sections" className="flex-1 overflow-y-auto custom-scrollbar px-3 py-3 space-y-1">
           {navItems.map((item) => {
             const NavIcon = item.icon;
             const isActive = activeTab === item.id;
@@ -1446,18 +1491,18 @@ function App() {
                   <span className="absolute left-0 top-2 bottom-2 w-0.5 bg-brass rounded-full" aria-hidden="true" />
                 )}
                 <NavIcon size={18} className={`shrink-0 ${isActive ? 'text-brass' : ''}`} />
-                <span className="text-[0.95rem] lowercase flex-1 text-left truncate">{item.label}</span>
+                <span className="text-[0.95rem] flex-1 text-left truncate">{item.label}</span>
                 {tabLocked(item.id)
                   ? <Lock size={12} className="shrink-0" />
-                  : item.byok ? <span className="readout shrink-0">BYOK</span>
-                    : item.isNew ? <span className="badge-brass shrink-0">new</span> : null}
+                  : item.byok ? <Chip className="shrink-0">BYOK</Chip>
+                    : item.isNew ? <Chip tone="accent" className="shrink-0">new</Chip> : null}
               </button>
             );
           })}
         </nav>
 
         <div className="px-3 py-3 border-t border-rule space-y-0.5 safe-bottom shrink-0">
-          <NavFooterLinks />
+          {NavFooterLinks({})}
         </div>
       </div>
     </div>
@@ -1470,7 +1515,7 @@ function App() {
     const tabs = navItems.filter((n) => n.primary);
     const moreActive = !tabs.some((t) => t.id === activeTab);
     return (
-      <nav className="md:hidden shrink-0 border-t border-rule bg-paper2/95 backdrop-blur-sm safe-bottom">
+      <nav aria-label="Primary" className="md:hidden shrink-0 border-t border-rule bg-paper2/95 backdrop-blur-sm safe-bottom">
         <div className="flex items-stretch">
           {tabs.map((item) => {
             const NavIcon = item.icon;
@@ -1486,18 +1531,19 @@ function App() {
                 className={`flex-1 min-w-0 flex flex-col items-center justify-center gap-1 py-2 min-h-[56px] transition-colors ${isActive ? 'text-ink' : 'text-muted active:text-ink2'} ${tabLocked(item.id) ? 'opacity-40 cursor-not-allowed' : ''}`}
               >
                 <NavIcon size={19} className={isActive ? 'text-brass' : ''} />
-                <span className="text-[10.5px] lowercase leading-none truncate max-w-full px-0.5">{item.short}</span>
+                <span className="text-[11px] leading-none truncate max-w-full px-0.5">{item.short}</span>
               </button>
             );
           })}
           <button
+            id="more-sections-btn"
             onClick={() => setNavOpen(true)}
             aria-label="more sections"
             aria-expanded={navOpen}
             className={`flex-1 min-w-0 flex flex-col items-center justify-center gap-1 py-2 min-h-[56px] transition-colors ${moreActive ? 'text-ink' : 'text-muted active:text-ink2'}`}
           >
             <Menu size={19} className={moreActive ? 'text-brass' : ''} />
-            <span className="text-[10.5px] lowercase leading-none">more</span>
+            <span className="text-[11px] leading-none">more</span>
           </button>
         </div>
       </nav>
@@ -1509,34 +1555,35 @@ function App() {
        viewport ever gets, so a h-screen shell hides its own bottom bar behind
        the browser chrome until the user scrolls. */
     <div className="flex h-screen supports-[height:100dvh]:h-[100dvh] bg-paper overflow-hidden">
-      <Sidebar />
-      {navOpen && <MobileNavDrawer />}
+      <button
+        type="button"
+        onClick={() => { const el = document.getElementById('source-url'); if (el) el.focus(); else document.querySelector('main')?.focus(); }}
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[100] btn-primary px-4 py-2 text-xs"
+      >
+        Skip to create
+      </button>
+      {Sidebar()}
+      {navOpen && MobileNavDrawer()}
 
-      <main className="flex-1 min-w-0 flex flex-col h-full overflow-hidden relative">
+      <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden relative">
         {/* Top Header */}
         <header className="h-14 border-b border-rule bg-paper flex items-center justify-between gap-2 px-3 sm:px-6 shrink-0 z-10">
           <div className="flex items-center gap-2 sm:gap-4 min-w-0">
             {/* Mobile: the drawer handle, and the section name the icon rail
                 used to carry. Without it a phone has no "where am I". */}
-            <button
-              onClick={() => setNavOpen(true)}
-              aria-label="open navigation"
-              className="md:hidden -ml-1 p-2 rounded-input text-muted active:bg-paper3 transition-colors shrink-0"
-            >
-              <Menu size={20} />
-            </button>
             <span data-tutorial="nav-clips" className="md:hidden font-display lowercase text-base text-ink truncate">
               {activeNav?.label || 'openshorts'}
             </span>
             {status !== 'idle' && (
-              <button
+              <Button
+                variant="quiet"
                 onClick={handleReset}
-                className="btn-quiet px-3 py-1.5 text-xs shrink-0"
+                className="px-3 py-1.5 text-xs shrink-0"
                 aria-label="New Project"
               >
                 <Plus size={14} />
                 <span className="hidden sm:inline">New Project</span>
-              </button>
+              </Button>
             )}
           </div>
 
@@ -1560,17 +1607,16 @@ function App() {
               }} />
             )}
             {billingEnabled && isSignedIn && !isManaged && (
-              <button onClick={() => setShowPlanChoice(true)}
-                className="btn-primary px-4 py-2 text-xs">
+              <Button onClick={() => setShowPlanChoice(true)} className="px-4 py-2 text-xs">
                 Choose a plan
-              </button>
+              </Button>
             )}
             {billingEnabled && !isSignedIn && (
-              <button onClick={() => setShowLogin(true)}
-                className="btn-ghost px-4 py-2 text-xs">
+              <Button variant="ghost" onClick={() => setShowLogin(true)} className="px-4 py-2 text-xs">
                 Sign in
-              </button>
+              </Button>
             )}
+            <ThemeToggle />
             {billingEnabled && isSignedIn && <ProfileMenu onUpgrade={isManaged ? openUpsell : null} />}
 
             {/* Hidden below sm: the standing banner underneath already says the
@@ -1594,15 +1640,16 @@ function App() {
             )}
           </div>
         </header>
+        <main tabIndex={-1} className="flex-1 min-h-0 min-w-0 flex flex-col outline-none">
 
         {/* Persistent Missing Keys Banner — visible on every screen */}
         {keysMissing && activeTab !== 'settings' && (
-          <div className="mx-3 sm:mx-6 mt-3 px-3.5 sm:px-4 py-3 bg-paper2 border border-rule rounded-card flex flex-wrap items-center justify-between gap-2.5 sm:gap-4 shrink-0 animate-fade">
+          <div className="mx-3 sm:mx-6 mt-2 sm:mt-3 px-3 sm:px-4 py-2 sm:py-3 bg-paper2 border border-rule rounded-card flex items-center justify-between gap-2.5 sm:gap-4 shrink-0 animate-fade">
             <div className="flex items-start sm:items-center gap-2.5 sm:gap-3 text-sm text-ink2 min-w-0 flex-1">
               <KeyRound size={16} className="shrink-0 text-warn mt-0.5 sm:mt-0" />
               <div className="min-w-0">
                 <span className="font-medium text-ink">Required API keys missing.</span>{' '}
-                <span className="text-muted">
+                <span className="text-muted hidden sm:inline">
                   {!geminiOk && !uploadPostKey
                     ? 'Set your Gemini and Upload-Post API keys to use OpenShorts.'
                     : !geminiOk
@@ -1611,12 +1658,9 @@ function App() {
                 </span>
               </div>
             </div>
-            <button
-              onClick={() => goToTab('settings')}
-              className="btn-quiet px-3 py-1.5 text-xs shrink-0 w-full sm:w-auto"
-            >
+            <Button variant="quiet" onClick={() => goToTab('settings')} className="px-3 py-1.5 text-xs shrink-0">
               Go to Settings
-            </button>
+            </Button>
           </div>
         )}
 
@@ -1731,7 +1775,7 @@ function App() {
                       value={uploadPostKey}
                       onChange={(e) => setUploadPostKey(e.target.value)}
                       className="input-field"
-                      placeholder="ey..."
+                      aria-label="Upload-Post API key" placeholder="ey..."
                     />
                     <button onClick={fetchUserProfiles} className="btn-quiet py-2 px-4 text-sm">
                       Connect
@@ -1786,7 +1830,7 @@ function App() {
                       value={elevenLabsKey}
                       onChange={(e) => setElevenLabsKey(e.target.value)}
                       className="input-field"
-                      placeholder="sk_..."
+                      aria-label="ElevenLabs API key" placeholder="sk_..."
                     />
                     <button
                       onClick={() => {
@@ -1844,7 +1888,7 @@ function App() {
                       value={falKey}
                       onChange={(e) => setFalKey(e.target.value)}
                       className="input-field"
-                      placeholder="fal_..."
+                      aria-label="fal.ai API key" placeholder="fal_..."
                     />
                     <button
                       onClick={() => {
@@ -1921,7 +1965,7 @@ function App() {
                     <div className="w-10 h-10 rounded-input bg-paper3 flex items-center justify-center">
                       <Upload size={18} className="text-brass" />
                     </div>
-                    <h3 className="font-medium text-ink lowercase">1. Drop your videos</h3>
+                    <h2 className="font-medium text-ink lowercase">1. Drop your videos</h2>
                     <p className="text-xs text-muted leading-relaxed">
                       Put your long-form vertical footage in the watched folder. The skill picks one video per run.
                     </p>
@@ -1931,7 +1975,7 @@ function App() {
                     <div className="w-10 h-10 rounded-input bg-paper3 flex items-center justify-center">
                       <Users size={18} className="text-brass" />
                     </div>
-                    <h3 className="font-medium text-ink lowercase">2. AI clippers work</h3>
+                    <h2 className="font-medium text-ink lowercase">2. AI clippers work</h2>
                     <p className="text-xs text-muted leading-relaxed">
                       Whisper transcribes, Gemini 3 Flash spots viral beats, FFmpeg cuts each clip and adds a hook overlay.
                     </p>
@@ -1941,7 +1985,7 @@ function App() {
                     <div className="w-10 h-10 rounded-input bg-paper3 flex items-center justify-center">
                       <CheckCircle2 size={18} className="text-brass" />
                     </div>
-                    <h3 className="font-medium text-ink lowercase">3. You validate, it ships</h3>
+                    <h2 className="font-medium text-ink lowercase">3. You validate, it ships</h2>
                     <p className="text-xs text-muted leading-relaxed">
                       Approve the candidates you like and the skill auto-publishes them to TikTok, Reels and YouTube Shorts via Upload-Post.
                     </p>
@@ -2040,7 +2084,7 @@ function App() {
           {activeTab === 'history' && (
             <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
               <div className="max-w-6xl mx-auto p-4 sm:p-6 md:p-8">
-                <HistoryTab onReopenProject={restoreProject} />
+                <HistoryTab onReopenProject={restoreProject} onCreate={() => { if (status === 'complete' || status === 'error') handleReset(); goToTab('dashboard'); setTimeout(() => document.getElementById('source-url')?.focus(), 150); }} />
               </div>
             </div>
           )}
@@ -2068,23 +2112,22 @@ function App() {
           {/* View: Dashboard (Idle) */}
           {activeTab === 'dashboard' && status === 'idle' && (
             <div className="h-full overflow-y-auto custom-scrollbar animate-fade">
-              <div className="min-h-full flex flex-col items-center justify-center px-4 py-5 sm:p-6">
+              <div className="min-h-full flex flex-col items-center justify-center px-4 py-3 sm:p-6">
               {/* On a phone the hero used to fill the fold on its own and push
                   the uploader — the whole point of the screen — below it. The
                   eyebrow, the display size and the gaps all shrink first. */}
-              <div className="max-w-xl w-full text-center space-y-5 sm:space-y-8">
-                <div className="space-y-2.5 sm:space-y-4">
-                  <p className="eyebrow hidden sm:block">01 · CLIP GENERATOR</p>
+              <div className="max-w-xl w-full text-left space-y-4 sm:space-y-6">
+                <div className="space-y-2 sm:space-y-3">
                   <h1 className="font-display lowercase text-3xl sm:text-4xl md:text-5xl text-ink">
-                    Create Viral Shorts
+                    Turn one long video into clips worth posting
                   </h1>
-                  <p className="text-muted text-[15px] sm:text-lg leading-snug sm:leading-normal max-w-sm sm:max-w-none mx-auto">
-                    Drop your long-form video below to instantly generate viral clips with AI.
+                  <p className="text-muted text-base leading-snug hidden sm:block max-w-md">
+                    Paste a link or drop a file. The AI finds the moments, cuts them vertical and writes the hooks.
                   </p>
                   {/* The same pipeline is an MCP server: point people at the
                       one place that explains how to drive it from an agent. */}
                   {!tutorialLock && (
-                  <p className="text-xs text-muted">
+                  <p className="text-xs text-muted hidden sm:block">
                     Or let an agent do it:{' '}
                     <a
                       href={billingEnabled ? '#/account' : '#app'}
@@ -2099,7 +2142,7 @@ function App() {
 
                 <MediaInput onProcess={handleProcess} isProcessing={status === 'processing'} />
 
-                <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-8 text-muted text-xs sm:text-sm">
+                <div className="hidden sm:flex flex-wrap items-center gap-6 text-muted text-sm">
                   <span className="flex items-center gap-2"><Youtube size={16} /> YouTube</span>
                   <span className="flex items-center gap-2"><Instagram size={16} /> Instagram</span>
                   <span className="flex items-center gap-2"><TikTokIcon size={16} /> TikTok</span>
@@ -2111,21 +2154,17 @@ function App() {
 
           {/* View: Processing / Results (Split View) */}
           {activeTab === 'dashboard' && (status === 'processing' || status === 'complete' || status === 'error') && (
-            <div className="h-full flex flex-col md:flex-row gap-3 md:gap-4 p-3 md:p-4 overflow-y-auto md:overflow-y-hidden custom-scrollbar animate-fade">
+            <div ref={pageScrollRef} className={`h-full flex flex-col gap-3 md:gap-4 p-3 md:p-4 overflow-y-auto custom-scrollbar animate-fade ${status === 'processing' ? 'md:flex-row md:overflow-y-hidden' : ''}`}>
 
               {/* Left Panel: Preview & Status */}
-              <div className={`${status === 'complete' ? 'w-full md:w-[30%] lg:w-[25%]' : 'w-full md:w-[55%] lg:w-[60%]'} md:h-full flex flex-col shrink-0 md:shrink card p-3.5 sm:p-6 md:overflow-y-auto custom-scrollbar transition-all duration-700 ease-in-out`}>
-                <div className="mb-4 sm:mb-6 flex items-center justify-between gap-2">
-                  <h2 className="text-sm font-medium text-ink lowercase flex items-center gap-2">
+              {/* Settled (done or failed): a slim status bar over full-width results. */}
+              <div className={`${status === 'processing' ? 'w-full md:w-[55%] lg:w-[60%] md:h-full flex flex-col md:shrink p-3.5 sm:p-6 md:overflow-y-auto' : `w-full flex flex-col ${processingMedia ? 'md:grid md:grid-cols-[minmax(0,1fr)_11rem] md:gap-x-5' : ''} p-3.5 sm:p-5`} shrink-0 card custom-scrollbar transition-all duration-200 ease-out ${status === 'error' ? 'order-2 md:order-none' : ''}`}>
+                <div className={`${status === 'processing' ? 'mb-4 sm:mb-6' : 'mb-3'} flex items-center justify-between gap-2`}>
+                  <h2 className="text-sm font-medium text-ink lowercase flex items-center gap-2 whitespace-nowrap">
                     <Activity className={`text-brass ${status === 'processing' ? 'animate-pulse' : ''}`} size={18} />
                     Live Analysis
                   </h2>
-                  <span className={status === 'processing' ? 'badge-brass' :
-                    status === 'complete' ? 'badge-ok' :
-                      'badge-danger'
-                    }>
-                    {status.toUpperCase()}
-                  </span>
+                  <StatusChip stage={jobInfo.stage} failed={jobInfo.failed} />
                 </div>
 
                 {/* Trimmed run: say it while it renders, not only once the
@@ -2162,6 +2201,7 @@ function App() {
 
                 {/* Video Preview */}
                 {processingMedia && (
+                  <div className={status === 'processing' ? '' : `${showSource ? 'order-last mt-3' : 'hidden'} md:block md:order-none md:mt-0 md:col-start-2 md:row-start-1 md:row-span-3 [&>div]:!mb-0 [&>div]:!aspect-video`}>
                   <ProcessingAnimation
                     media={processingMedia}
                     isComplete={status === 'complete'}
@@ -2169,19 +2209,21 @@ function App() {
                     isSyncedPlaying={isSyncedPlaying}
                     syncTrigger={syncTrigger}
                   />
+                  </div>
                 )}
 
-                {/* Phones only. The scan box drops its invented telemetry at
-                    this size and the log terminal below starts collapsed, so
-                    without this the screen would say nothing about what the job
-                    is actually doing. The log tail is the real answer. */}
-                {status === 'processing' && (
-                  <div className="sm:hidden mb-3 flex items-start gap-2 text-xs text-ink2 min-w-0">
-                    <Loader2 size={14} className="animate-spin text-brass shrink-0 mt-px" />
-                    <span className="min-w-0 leading-snug break-words">
-                      {logs.length ? logs[logs.length - 1] : 'starting up…'}
-                    </span>
-                  </div>
+                <h1 className="sr-only">Your clips</h1>
+                <JobTimeline info={jobInfo} compact={status !== 'processing'} />
+
+                {status !== 'processing' && processingMedia && (
+                  <button
+                    type="button"
+                    onClick={() => setShowSource((v) => !v)}
+                    aria-expanded={showSource}
+                    className="md:hidden self-start mb-2 text-xs text-muted underline underline-offset-2"
+                  >
+                    {showSource ? 'Hide source' : 'View source'}
+                  </button>
                 )}
 
                 {/* The render is dead time: the user is watching a progress bar
@@ -2192,44 +2234,30 @@ function App() {
                   </div>
                 )}
 
-                {/* Logs Terminal */}
-                <div className={`bg-paper rounded-card border border-rule overflow-hidden flex flex-col transition-all duration-500 ${status === 'complete' ? `min-h-0 opacity-50 hover:opacity-100 ${logsVisible ? 'h-32' : 'h-auto'}` : `flex-1 ${logsVisible ? 'min-h-[160px] sm:min-h-[200px]' : 'min-h-0 flex-none'}`}`}>
-                  <button
-                    type="button"
-                    onClick={() => setLogsVisible(!logsVisible)}
-                    aria-expanded={logsVisible}
-                    className="w-full px-3.5 sm:px-4 py-2.5 border-b border-rule flex items-center justify-between gap-2 bg-paper2 shrink-0 text-left"
-                  >
-                    <span className="readout flex items-center gap-2">
-                      <Terminal size={12} /> System Logs
-                    </span>
+                {/* Raw logs: native <details>, collapsed, Enter/Space toggle. */}
+                <details className="group/logs rounded-card border border-rule bg-paper overflow-hidden">
+                  <summary className="px-3.5 sm:px-4 py-2.5 flex items-center justify-between gap-2 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden bg-paper2">
+                    <span className="readout flex items-center gap-2 whitespace-nowrap"><Terminal size={12} /> Raw logs</span>
                     <span className="flex items-center gap-2 text-muted">
-                      {!logsVisible && logs.length > 0 && (
-                        <span className="readout normal-case">{logs.length}</span>
-                      )}
-                      <ChevronDown size={16} className={logsVisible ? '' : 'rotate-180'} />
+                      {logs.length > 0 && <span className="readout normal-case tabular">{logs.length}</span>}
+                      <ChevronDown size={16} className="transition-transform duration-200 group-open/logs:rotate-180" />
                     </span>
-                  </button>
-                  {logsVisible && (
-                    <div className="flex-1 p-3.5 sm:p-4 overflow-y-auto font-mono text-[11px] sm:text-xs space-y-1.5 custom-scrollbar text-muted break-words">
-                      {logs.map((log, i) => (
-                        <div key={i} className={`flex gap-2 ${log.toLowerCase().includes('error') ? 'text-danger' : 'text-muted'}`}>
-                          <span className="text-muted opacity-50 shrink-0 hidden sm:inline tabular-nums">
-                            {logTimes[i] ? new Date(logTimes[i] * 1000).toLocaleTimeString() : ''}
-                          </span>
-                          <span className="min-w-0 break-words">{log}</span>
-                        </div>
-                      ))}
-                      {status === 'processing' && (
-                        <div className="animate-pulse text-brass">_</div>
-                      )}
-                    </div>
-                  )}
-                </div>
+                  </summary>
+                  <div className="max-h-64 p-3.5 sm:p-4 overflow-y-auto font-mono text-[11px] sm:text-xs space-y-1.5 custom-scrollbar text-muted break-words border-t border-rule">
+                    {logs.map((log, i) => (
+                      <div key={i} className={`flex gap-2 ${log.toLowerCase().includes('error') ? 'text-danger' : 'text-muted'}`}>
+                        <span className="text-muted opacity-50 shrink-0 hidden sm:inline tabular-nums">
+                          {logTimes[i] ? new Date(logTimes[i] * 1000).toLocaleTimeString() : ''}
+                        </span>
+                        <span className="min-w-0 break-words">{log}</span>
+                      </div>
+                    ))}
+                  </div>
+                </details>
               </div>
 
               {/* Right Panel: Results Grid */}
-              <div className={`${status === 'complete' ? 'w-full md:w-[70%] lg:w-[75%]' : 'w-full md:w-[45%] lg:w-[40%]'} md:h-full flex flex-col shrink-0 md:shrink card p-3.5 sm:p-6 transition-all duration-700 ease-in-out`}>
+              <div ref={resultsPanelRef} className={`${status === 'processing' ? 'w-full md:w-[45%] lg:w-[40%] md:h-full md:shrink' : 'w-full'} flex flex-col shrink-0 card p-3.5 sm:p-6 transition-all duration-200 ease-out ${status === 'error' ? 'order-1 md:order-none' : ''}`}>
                 {/* Title + counters on one row, the two actions on their own row
                     below. Wrapping them all together dropped a lone half-width
                     "schedule week" pill under the title on a phone. */}
@@ -2248,7 +2276,7 @@ function App() {
                     )}
                   </h2>
                   {results?.clips?.length > 0 && status === 'complete' && (
-                    <div className="flex flex-col sm:flex-row sm:justify-end items-stretch sm:items-center gap-2">
+                    <div className="flex flex-row sm:justify-end items-stretch sm:items-center gap-2 [&>button]:flex-1 sm:[&>button]:flex-none">
                       <button
                         onClick={handleDownloadAll}
                         disabled={downloadingAll}
@@ -2395,13 +2423,14 @@ function App() {
                   </div>
                 )}
 
-                <div className="flex-1 overflow-y-auto custom-scrollbar p-1">
+                <div onScroll={(e) => { if (status === 'processing') resultsScrollTop.current = e.currentTarget.scrollTop; }} className={`flex-1 p-1 ${status === 'processing' ? 'overflow-y-auto custom-scrollbar' : ''}`}>
                   {results && results.clips && results.clips.length > 0 ? (
-                    <div className={`grid gap-4 pb-10 ${status === 'complete' ? 'grid-cols-[repeat(auto-fill,minmax(min(100%,600px),1fr))]' : 'grid-cols-1'}`}>
+                    <div className={`grid gap-4 pb-10 ${status === 'complete' ? 'grid-cols-[repeat(auto-fill,minmax(min(100%,280px),1fr))]' : 'grid-cols-1'}`}>
                       {rankedClips.map(({ clip, index: i }) => (
                         <ResultCard
                           key={`${jobId}-${i}-${clip.video_url || ''}`}
                           clip={clip}
+                          stacked
                           index={i}
                           jobId={jobId}
                           onEditClip={(index) => setEditingClip(index)}
@@ -2427,16 +2456,29 @@ function App() {
                     </div>
                   ) : (
                     status === 'processing' ? (
-                      <div className="h-full min-h-[140px] flex flex-col items-center justify-center text-muted space-y-3 text-center px-4">
-                        <Loader2 size={28} className="animate-spin text-brass" />
-                        <p className="text-sm lowercase">Waiting for clips...</p>
-                        <p className="text-xs text-muted/80 max-w-[26ch] leading-snug">
-                          They appear here one by one as each finishes rendering.
-                        </p>
+                      <div className="grid gap-4 pb-10 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3" aria-busy="true" aria-label="Waiting for clips">
+                        {[0, 1, 2].map((n) => (
+                          <div key={n} className="card overflow-hidden" style={{ opacity: 1 - n * 0.25 }}>
+                            <Skeleton className="aspect-[9/16] !rounded-none" />
+                            <div className="p-4 space-y-2">
+                              <Skeleton className="h-4 w-3/4" />
+                              <Skeleton className="h-3 w-1/2" />
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     ) : status === 'error' ? (
-                      <div className="h-full min-h-[120px] flex flex-col items-center justify-center text-danger space-y-2">
-                        <p>Generation failed.</p>
+                      <div role="alert" className="h-full min-h-[200px] flex flex-col items-start justify-center gap-3 px-2">
+                        <h3 className="font-display text-3xl text-ink">That run did not finish.</h3>
+                        <p className="text-sm text-muted max-w-md">{jobError || 'Something stopped the job before any clip was ready.'}</p>
+                        <div className="flex gap-2 mt-1">
+                          {lastRequestRef.current && (
+                            <button type="button" className="btn-primary px-4 py-2 text-sm" onClick={() => handleProcess(lastRequestRef.current.data, lastRequestRef.current.forceLowQuality)}>
+                              Retry
+                            </button>
+                          )}
+                          <button type="button" className="btn-ghost px-4 py-2 text-sm" onClick={handleReset}>Start over</button>
+                        </div>
                       </div>
                     ) : null
                   )}
@@ -2447,12 +2489,12 @@ function App() {
           )}
 
         </div>
+        </main>
 
         {/* Phone navigation. A flex sibling of the scrolling pane, not a fixed
             overlay, so content is never trapped behind it. */}
-        <MobileTabBar />
-
-      </main>
+        {MobileTabBar()}
+      </div>
 
       {/* Missing API Key Modal */}
       <Modal
@@ -2502,7 +2544,7 @@ function App() {
                 </ol>
                 <input
                   type="text"
-                  placeholder="Paste your Gemini API key here..."
+                  aria-label="Gemini API key" placeholder="Paste your Gemini API key here..."
                   className="input-field"
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && e.target.value.trim()) {
@@ -2533,7 +2575,7 @@ function App() {
                 </ol>
                 <input
                   type="text"
-                  placeholder="Paste your Upload-Post API key here..."
+                  aria-label="Upload-Post API key" placeholder="Paste your Upload-Post API key here..."
                   className="input-field"
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && e.target.value.trim()) {

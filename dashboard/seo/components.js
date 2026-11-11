@@ -55,7 +55,7 @@ export const COMPONENTS_CSS = `
 .calc input[type=range]{width:100%;accent-color:var(--brass)}
 .calc .billing{display:flex;gap:.35rem}
 .calc .billing button{background:transparent;border:1px solid var(--rule2);color:var(--ink2);border-radius:999px;padding:.35rem .85rem;font:inherit;font-size:.85rem;cursor:pointer}
-.calc .billing button[aria-pressed=true]{background:var(--brass);border-color:var(--brass);color:oklch(17% 0.03 50)}
+.calc .billing button[aria-pressed=true]{background:var(--brass);border-color:var(--brass);color:var(--accent-ink)}
 .bars{list-style:none;padding:0;margin:0}
 .bars li{display:grid;grid-template-columns:8.5rem 1fr;gap:.25rem 1rem;align-items:center;padding:.6rem 0;border-top:1px solid var(--rule);margin:0}
 .bars .bt{font-weight:500;color:var(--ink);line-height:1.3}
@@ -65,7 +65,7 @@ export const COMPONENTS_CSS = `
 .bars .fill{position:absolute;inset:0 auto 0 0;background:oklch(64% 0.012 262 / .35);border-radius:6px;min-width:2px;transition:width .25s}
 .bars li.us .fill{background:var(--brass)}
 .bars .val{position:absolute;left:.6rem;top:50%;transform:translateY(-50%);font-size:.85rem;color:var(--ink);white-space:nowrap}
-.bars li.us .val{color:oklch(17% 0.03 50);font-weight:600}
+.bars li.us .val{color:var(--accent-ink);font-weight:600}
 .bars li.us .val.ext{color:var(--brass)}
 .bars .val.ext{color:var(--ink)}
 .calc-note{font-size:.8rem;color:var(--muted);margin:.75rem 0 0}

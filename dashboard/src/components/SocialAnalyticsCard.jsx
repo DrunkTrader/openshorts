@@ -42,9 +42,9 @@ export default function SocialAnalyticsCard() {
   return (
     <div className="card p-6">
       <div className="flex items-baseline justify-between gap-4 mb-1">
-        <h3 className="font-display lowercase text-lg text-ink flex items-center gap-2">
+        <h2 className="font-display lowercase text-lg text-ink flex items-center gap-2">
           <BarChart3 size={16} className="text-brass" /> Your posts
-        </h3>
+        </h2>
         <span className="text-muted text-xs lowercase">
           posted in the last 30 days
           {data.refreshing ? ' · updating, reload in a minute'

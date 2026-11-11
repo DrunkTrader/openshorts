@@ -7,14 +7,28 @@
   <!-- viewport-fit=cover so the bottom tab bar can pad itself past the iOS home
        indicator with env(safe-area-inset-bottom); without it that inset reads 0. -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#0b0d12" />
-  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#faf9f7" />
+  <meta name="color-scheme" content="light" />
+  <!-- Pre-paint theme: same rule as src/lib/theme.js (os_theme, else OS preference). -->
+  <script>
+    (function () {
+      var t = null;
+      try { t = localStorage.getItem('os_theme'); } catch (e) {}
+      if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.dataset.theme = t;
+      document.querySelector('meta[name="color-scheme"]').setAttribute('content', t);
+      document.querySelector('meta[name="theme-color"]').setAttribute('content', t === 'dark' ? '#0b0b0c' : '#faf9f7');
+    })();
+  </script>
 
   <!-- Fonts: Lumen system (Instrument Serif display · Geist body · JetBrains Mono labels).
        Served from this origin, not fonts.googleapis.com: a Google-hosted
        stylesheet sends every visitor's IP address to a US processor before the
        page has rendered and before anyone consented to anything. See
        public/fonts.css for how the subsets were generated. -->
+  <link rel="preload" href="/fonts/geist-400-latin.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="/fonts/geist-500-latin.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="/fonts/instrument-serif-400-latin.woff2" as="font" type="font/woff2" crossorigin />
   <link rel="stylesheet" href="/fonts.css" />
 
   <!-- Primary SEO Meta Tags -->

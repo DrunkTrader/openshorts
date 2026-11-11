@@ -4,6 +4,7 @@ import './index.css'
 import Landing from './Landing.jsx'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { capture as captureAttribution } from './lib/attribution'
+import SkipLink from './components/ui/SkipLink'
 import PricingPage from './components/PricingPage'
 import AccountPage from './components/AccountPage'
 import LoginModal from './components/LoginModal'
@@ -16,14 +17,20 @@ const App = lazy(() => import('./App.jsx'))
 const Legal = lazy(() => import('./Legal.jsx'))
 const OAuthConsent = lazy(() => import('./components/OAuthConsent'))
 
+import ThemeToggle from './components/ui/ThemeToggle'
+
 function PageShell({ title, children }) {
   return (
     <div className="min-h-screen bg-paper text-ink2">
+      <SkipLink />
       <header className="h-14 sm:h-16 border-b border-rule bg-paper flex items-center justify-between gap-3 px-4 sm:px-6 sticky top-0 z-20">
         <a href="#app" className="font-display lowercase text-lg text-ink truncate">OpenShorts</a>
-        <a href="#app" className="text-sm lowercase text-muted hover:text-ink transition-colors shrink-0">← <span className="hidden sm:inline">Back to app</span><span className="sm:hidden">back</span></a>
+        <nav aria-label="Site" className="flex items-center gap-2 shrink-0">
+          <ThemeToggle />
+          <a href="#app" className="text-sm lowercase text-muted hover:text-ink transition-colors">← <span className="hidden sm:inline">Back to app</span><span className="sm:hidden">back</span></a>
+        </nav>
       </header>
-      <main className="p-4 sm:p-6 md:p-8 pb-[max(2rem,env(safe-area-inset-bottom))]">
+      <main tabIndex={-1} className="outline-none p-4 sm:p-6 md:p-8 pb-[max(2rem,env(safe-area-inset-bottom))]">
         {title && <h1 className="font-display lowercase text-2xl sm:text-3xl text-ink text-center mb-6 sm:mb-10">{title}</h1>}
         {children}
       </main>
@@ -84,7 +91,8 @@ function LoginView() {
 // explanation.
 function DeletedView() {
   return (
-    <div className="min-h-screen bg-paper text-ink2 flex items-center justify-center p-6">
+    <div className="min-h-screen bg-paper text-ink2 flex items-center justify-center p-6 relative">
+      <ThemeToggle className="absolute top-4 right-4" />
       <div className="max-w-md text-center space-y-4">
         <h1 className="font-display lowercase text-2xl sm:text-3xl text-ink">Your account is deleted</h1>
         <p className="text-sm">

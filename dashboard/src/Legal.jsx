@@ -1,3 +1,4 @@
+import ThemeToggle from './components/ui/ThemeToggle';
 import React from 'react';
 import { ArrowLeft, FileText, Shield, Landmark, Flag, RotateCcw } from 'lucide-react';
 
@@ -55,10 +56,11 @@ export default function Legal() {
     return (
         <div className="min-h-screen bg-paper text-ink2">
             <header className="border-b border-rule sticky top-0 bg-paper z-10">
-                <div className="max-w-[65ch] mx-auto px-6 py-3 flex items-center">
+                <div className="max-w-[65ch] mx-auto px-6 py-3 flex items-center justify-between">
                     <button onClick={handleBack} className="btn-quiet">
                         <ArrowLeft size={16} /> Back
                     </button>
+                    <ThemeToggle />
                 </div>
             </header>
 

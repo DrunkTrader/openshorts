@@ -13,7 +13,7 @@
 .hero-h1 {
   font-family: var(--font-display);
   font-size: clamp(2.75rem, 5vw + 1rem, 5rem);
-  letter-spacing: -0.032em;
+  letter-spacing: var(--tracking-display);
   line-height: 1.05;
   text-transform: lowercase;
   color: var(--color-ink);

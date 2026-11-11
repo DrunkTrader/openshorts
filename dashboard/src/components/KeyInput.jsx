@@ -35,12 +35,15 @@ export default function KeyInput({ onKeySet, savedKey }) {
                             setKey(e.target.value);
                             setIsSaved(false);
                         }}
-                        placeholder="AIzaSy..."
+                        aria-label="Gemini API key" placeholder="AIzaSy..."
                         className="input-field pr-12 font-mono"
                     />
                     <button
+                        type="button"
                         onClick={() => setIsVisible(!isVisible)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-ink transition-colors"
+                        aria-label={isVisible ? 'hide key' : 'show key'}
+                        aria-pressed={isVisible}
+                        className="absolute right-1 top-1/2 -translate-y-1/2 p-2.5 text-muted hover:text-ink transition-colors"
                     >
                         {isVisible ? <EyeOff size={18} /> : <Eye size={18} />}
                     </button>

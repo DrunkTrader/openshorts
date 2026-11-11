@@ -48,7 +48,7 @@ export default function UGCGallery() {
     <div className="space-y-6">
       <div>
         <p className="eyebrow mb-1">05 · UGC GALLERY</p>
-        <h2 className="font-display lowercase text-2xl md:text-3xl text-ink">ugc gallery</h2>
+        <h1 className="font-display lowercase text-2xl md:text-3xl text-ink">ugc gallery</h1>
         <p className="readout mt-2">
           {loadingVideos ? '…' : videos.length} videos
           {avatarsLoaded ? ` · ${avatars.length} avatars` : ''}
