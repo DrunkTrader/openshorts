@@ -49,8 +49,8 @@ def test_llm_failure_keeps_the_clip_with_generic_copy():
         raise RuntimeError("tunnel down")
 
     silent_copy.fill_silent_copy(clips, boom, "My Race Day", CHAPTERS, TR)
-    assert clips[0]["video_title_for_youtube_short"] == "Final lap"
-    assert clips[1]["video_title_for_youtube_short"] == "My Race Day"
+    assert clips[0]["video_title_for_youtube_short"] == "Final lap (0:10)"
+    assert clips[1]["video_title_for_youtube_short"] == "My Race Day (1:50)"
     assert all(c["viral_hook_text"] and c["start"] < c["end"] for c in clips)
 
 
@@ -66,3 +66,16 @@ def test_local_llm_never_gets_media():
     assert list(params) == ["prompt", "schema", "model"]
     assert params["prompt"].annotation in (str, "str")
     assert not any(w in gemini_worker.SILENT_COPY_PROMPT_TEMPLATE.lower() for w in ("image", "frame", "attach"))
+
+
+def test_generic_title_is_never_a_bare_highlight():
+    clip = {"start": 75.0, "end": 100.0}
+    silent_copy._generic(clip, "", "")
+    assert clip["video_title_for_youtube_short"] == "Clip at 1:15"
+
+
+def test_only_lines_spoken_shortly_before_the_clip_are_sent():
+    tr = {"segments": [{"start": 0, "end": 5, "text": "ancient history"},
+                      {"start": 300, "end": 305, "text": "just said this"}]}
+    assert silent_copy._lines_before(tr, 310.0) == "just said this"
+    assert silent_copy._lines_before(tr, 600.0) == ""

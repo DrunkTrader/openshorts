@@ -939,7 +939,7 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
     Downloads a YouTube video using yt-dlp.
     Returns the path to the downloaded video and the video title.
 
-    ``on_audio(path, duration)``: when given, the audio track is also fetched
+    ``on_audio(path, duration, meta)`` (meta: title, chapters): when given, the audio track is also fetched
     on its own, in parallel, and handed over as soon as it lands, so the
     caller can transcribe while the (much larger) video is still coming. It is
     the same audio format the merged mp4 gets. Never on the per-GB proxy.
@@ -1123,7 +1123,8 @@ def _download_youtube_video(url, output_dir=".", on_audio=None, allow_paid=True,
                     or res.get('filepath'))
             if path and os.path.exists(path):
                 print(f"🎧 Audio ready ahead of the video: {os.path.basename(path)}")
-                on_audio(path, info.get('duration'))
+                on_audio(path, info.get('duration'),
+                         {"title": info.get('title'), "chapters": info.get('chapters')})
         except Exception as e:
             print(f"   ℹ️ Early audio skipped ({type(e).__name__}: {e}) — "
                   f"transcribing once the video is in.")
@@ -2527,6 +2528,12 @@ def speech_is_sparse(transcript, duration):
     return words < MIN_SPEECH_WORDS or words / minutes < MIN_SPEECH_WORDS_PER_MIN
 
 
+def silent_context(audio, meta=None):
+    """The ``silent`` argument of ``get_viral_clips``: the audio to measure and
+    what the one extraction knew of the video (title, chapters), when it knew."""
+    return {"audio": audio, **{k: v for k, v in (meta or {}).items() if v and k in ("title", "chapters")}}
+
+
 def select_clips(transcript, duration, video, viewer_clips=None, replay_heat=None,
                  silent=None, fetch_full=None):
     """Pick the clips of one job. Returns ``(clips_data, video, title, vision)``;
@@ -2545,6 +2552,11 @@ def select_clips(transcript, duration, video, viewer_clips=None, replay_heat=Non
             return clips, None, None, False
         print("🔇 Too little speech and no usable audio or heat signal in the silent stretches.")
     if not os.getenv("GEMINI_API_KEY"):
+        if not llm_backend.active():
+            raise RuntimeError(
+                "Clip detection failed: no LLM is configured (set GEMINI_API_KEY, or LLM_BASE_URL "
+                "for a text-only server). Clips from footage without speech need one to write "
+                "their titles.")
         raise RuntimeError(
             "Clip detection failed: this footage has no speech to clip by and no audio or "
             "replay-heat peaks to rank, so it can only be clipped by watching it, and that needs "
@@ -2851,13 +2863,13 @@ if __name__ == '__main__':
         early = {"lock": threading.Lock(), "done": threading.Event(), "started": False,
                  "abandoned": False, "invalid": False, "transcript": None, "clips": None}
 
-        def _early_work(audio_path, audio_duration):
+        def _early_work(audio_path, audio_duration, meta=None):
             try:
                 t = transcribe_video(audio_path)
                 early["transcript"] = t
                 if audio_duration:
                     early["clips"] = get_viral_clips(t, audio_duration, viewer_clips=viewer_clips,
-                                                     silent={"audio": audio_path})
+                                                     silent=silent_context(audio_path, meta))
             except Exception as e:
                 print(f"   ℹ️ Early transcription skipped ({type(e).__name__}: {e}).")
                 early["transcript"] = early["clips"] = None
@@ -2868,12 +2880,12 @@ if __name__ == '__main__':
                 except OSError:
                     pass
 
-        def _on_audio(audio_path, audio_duration):
+        def _on_audio(audio_path, audio_duration, meta=None):
             with early["lock"]:
                 if early["abandoned"]:
                     return
                 early["started"] = True
-            threading.Thread(target=_early_work, args=(audio_path, audio_duration),
+            threading.Thread(target=_early_work, args=(audio_path, audio_duration, meta),
                              daemon=True).start()
 
         use_early = (not args.skip_analysis and not args.transcript

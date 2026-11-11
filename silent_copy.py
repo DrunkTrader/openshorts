@@ -8,6 +8,7 @@ is still returned.
 import json
 
 LINES_CHARS = 300   # spoken text sent per clip
+LINES_WINDOW = 120  # only lines spoken within this many seconds before the clip
 TITLE_CHARS = 100
 
 
@@ -23,12 +24,14 @@ def _chapter_at(chapters, t):
 
 def _lines_before(transcript, t, max_chars=LINES_CHARS):
     segs = [str(g.get("text") or "").strip() for g in (transcript or {}).get("segments", [])
-            if float(g.get("end", 0)) <= t and str(g.get("text") or "").strip()]
+            if t - LINES_WINDOW <= float(g.get("end", 0)) <= t and str(g.get("text") or "").strip()]
     return " ".join(segs)[-max_chars:].strip()
 
 
 def _generic(clip, video_title, chapter):
-    title = (chapter or video_title or "Highlight").strip()[:TITLE_CHARS]
+    at = f"{int(float(clip['start']) // 60)}:{int(float(clip['start']) % 60):02d}"
+    base = (chapter or video_title or "").strip()
+    title = (f"{base} ({at})" if base else f"Clip at {at}")[:TITLE_CHARS]
     clip.update({"viral_hook_text": title[:60], "video_title_for_youtube_short": title,
                  "video_description_for_tiktok": title, "video_description_for_instagram": title})
 

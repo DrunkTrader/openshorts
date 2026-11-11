@@ -146,3 +146,12 @@ def test_source_without_audio_stream_stops_after_one_attempt(main, fake_ydl, tmp
     with pytest.raises(main.NoAudioFormat):
         main._download_youtube_video(YT, str(tmp_path), audio_only=True)
     assert len(fake_ydl.instances) == 1
+
+
+def test_early_audio_callback_gets_title_and_chapters(main, fake_ydl, tmp_path):
+    import threading
+    got, done = [], threading.Event()
+    main._download_youtube_video(YT, str(tmp_path),
+                                 on_audio=lambda path, dur, meta=None: (got.append((dur, meta)), done.set()))
+    assert done.wait(10)
+    assert got[0] == (300, {"title": "Talk", "chapters": [{"title": "Intro"}]})

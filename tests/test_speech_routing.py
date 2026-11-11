@@ -60,3 +60,22 @@ def test_speech_that_fails_is_not_sent_to_vision(main, monkeypatch):
     monkeypatch.setattr(main, "get_viral_clips", lambda *a, **k: None)
     data, _, _, vision = main.select_clips(SPEECH, 300.0, "a.m4a")
     assert data is None and not vision and not visual
+
+
+def test_no_llm_at_all_says_so(main, monkeypatch):
+    _stub(main, monkeypatch, _peaky())
+    with pytest.raises(RuntimeError, match="no LLM is configured"):
+        main.select_clips(SPARSE, 600.0, "a.m4a", silent={"audio": "a.m4a"})
+
+
+def test_early_path_hands_title_and_chapters_to_the_silent_copy(main, monkeypatch):
+    ctx = main.silent_context("a.m4a", {"title": "Race Day", "chapters": [{"title": "Lap 3"}], "id": "x"})
+    assert ctx == {"audio": "a.m4a", "title": "Race Day", "chapters": [{"title": "Lap 3"}]}
+    assert main.silent_context("a.m4a") == {"audio": "a.m4a"}
+    # and the copy prompt carries it: no empty VIDEO_TITLE on the default (non-range) path
+    _stub(main, monkeypatch, _peaky())
+    seen = []
+    monkeypatch.setattr(main, "_run_gemini_stage", lambda c, m, p, s: seen.append(p) or ({"shorts": []}, None))
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:1/v1")
+    main.get_viral_clips(SPARSE, 600.0, silent=ctx)
+    assert any("VIDEO_TITLE: Race Day" in p for p in seen)
