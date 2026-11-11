@@ -51,9 +51,9 @@
   --shadow-pop: 0 2px 4px oklch(20% 0.01 85 / 0.06), 0 18px 48px -12px oklch(20% 0.01 85 / 0.22);
 
   /* type */
-  --font-display: "Instrument Serif", ui-serif, Georgia, serif;
-  --font-body: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-display: "Instrument Serif", "Instrument Serif Fallback", ui-serif, Georgia, serif;
+  --font-body: "Geist", "Geist Fallback", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "JetBrains Mono Fallback", ui-monospace, SFMono-Regular, monospace;
   --text-display: clamp(3rem, 6vw + 1rem, 6rem);
   --tracking-display: -0.018em;
   --tracking-micro: 0.08em;
