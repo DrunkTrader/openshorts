@@ -189,6 +189,7 @@ export default function PricingPage({ onRequireLogin }) {
       {/* Pricing grid */}
       <section id="pricing-plans" className="px-6 py-16 border-t border-rule scroll-mt-8">
         <div className="max-w-6xl mx-auto">
+          <h2 className="sr-only">Plans</h2>
           <PricingSection onRequireLogin={onRequireLogin} />
         </div>
       </section>

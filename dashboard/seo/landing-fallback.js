@@ -171,6 +171,7 @@ export const LANDING_FALLBACK = `<div id="seo-content" style="background:oklch(1
 ${renderNav()}
 ${NAV_SCRIPT}
 
+<main>
 <section style="${S.section};padding-top:4rem"><div style="${S.wrap}">
   <p style="${S.eyebrow}">Free AI clip generator &middot; open source</p>
   <h1 style="${S.h1}">Free AI clip maker: long video in, viral shorts out</h1>
@@ -278,5 +279,6 @@ ${NAV_SCRIPT}
   <h2 style="${S.h2}">Open source: run the same pipeline on your own hardware</h2>
   <p style="${S.p};max-width:48rem">${EDITIONS.selfHosted.summary} It needs Docker and realistically 8GB of RAM; an NVIDIA GPU is optional and cuts processing time by roughly an order of magnitude. <a style="${S.a}" href="https://github.com/mutonby/openshorts" rel="noopener">Source and setup on GitHub</a>.</p>
 </div></section>
+</main>
 
 </div>`

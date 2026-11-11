@@ -570,6 +570,8 @@ export default function Landing({ onLaunchApp }) {
       {/* Navigation: the shared site nav (seo/nav.js), same items as every page */}
       <SiteNav className="fixed top-0 w-full z-50" />
 
+      <main>
+
       {/* Hero — Marquee Hero: blueprint grid, content left, apparatus right */}
       <section className="hero-blueprint relative overflow-clip border-b border-rule pt-32 pb-20 px-6">
         <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_auto] gap-14 items-center">
@@ -1178,10 +1180,12 @@ export default function Landing({ onLaunchApp }) {
           </div>
         </div>
       </section>
+      </main>
 
       {/* Floating CTA, the same form as the hero */}
       <form
         onSubmit={handleHeroSubmit}
+        aria-label="Quick start"
         aria-hidden={!stickyCta}
         className={`fixed z-40 bottom-4 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-xl flex items-center gap-2 p-2 rounded-full border border-rule bg-paper2/95 backdrop-blur shadow-2xl transition-all duration-300 ${stickyCta ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6 pointer-events-none'}`}
       >

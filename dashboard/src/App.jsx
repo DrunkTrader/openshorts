@@ -34,7 +34,7 @@ import ProfileMenu from './components/ProfileMenu';
 import Chip from './components/ui/Chip';
 import Button from './components/ui/Button';
 import ThemeToggle from './components/ui/ThemeToggle';
-import Modal from './components/ui/Modal';
+import Modal, { trapTab } from './components/ui/Modal';
 import { useAuth } from './contexts/AuthContext';
 import { apiFetch, apiJson, QuotaError, QUOTA_WALL_EVENT } from './lib/api';
 import { track } from './lib/analytics';
@@ -1332,9 +1332,15 @@ function App() {
   // there is no body scroll to lock behind it.
   useEffect(() => {
     if (!navOpen) return;
-    const onKey = (e) => { if (e.key === 'Escape') setNavOpen(false); };
+    const opener = document.activeElement;
+    const drawer = document.getElementById('nav-drawer');
+    drawer?.focus();
+    const onKey = (e) => { if (e.key === 'Escape') setNavOpen(false); else trapTab(e, drawer); };
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      if (opener instanceof HTMLElement && document.contains(opener)) opener.focus();
+    };
   }, [navOpen]);
 
   const goToTab = (id) => {
@@ -1390,7 +1396,7 @@ function App() {
   // Desktop rail: icon-only from md, labelled from lg. Below md it is gone
   // entirely — an unlabelled 80px rail ate a fifth of a phone screen.
   const Sidebar = () => (
-    <div className="hidden md:flex w-16 lg:w-56 bg-paper2 border-r border-rule flex-col h-full shrink-0 transition-[width] duration-200 ease-out">
+    <aside aria-label="Sidebar" className="hidden md:flex w-16 lg:w-56 bg-paper2 border-r border-rule flex-col h-full shrink-0 transition-[width] duration-200 ease-out">
       <a href="#app" onClick={() => goToTab('dashboard')} className="h-14 px-4 lg:px-5 flex items-center justify-center lg:justify-start gap-3 shrink-0" title="openshorts home" aria-label="openshorts home">
         <div className="w-8 h-8 bg-paper3 rounded-input flex items-center justify-center shrink-0 overflow-hidden border border-rule">
           <img src="/logo-openshorts.png" alt="Logo" className="w-full h-full object-cover" />
@@ -1408,7 +1414,6 @@ function App() {
               data-tutorial={item.id === 'dashboard' ? 'nav-clips' : undefined}
               onClick={() => goToTab(item.id)}
               title={tabLocked(item.id) ? 'Finish your first clips to unlock' : item.label}
-              aria-label={item.label}
               aria-current={isActive ? 'page' : undefined}
               disabled={tabLocked(item.id)}
               className={`relative w-full flex items-center justify-center lg:justify-start gap-3 px-3 py-2.5 rounded-input transition-colors duration-150 ${isActive ? 'bg-paper3 text-ink' : 'text-muted hover:text-ink2 hover:bg-paper3/50'} ${tabLocked(item.id) ? 'opacity-40 cursor-not-allowed hover:bg-transparent hover:text-muted' : ''}`}
@@ -1417,7 +1422,7 @@ function App() {
                 <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 bg-brass rounded-full" aria-hidden="true" />
               )}
               <NavIcon size={18} className="shrink-0" />
-              <span className="text-sm hidden lg:block flex-1 text-left truncate">{item.label}</span>
+              <span className="text-sm sr-only lg:not-sr-only lg:block flex-1 text-left truncate">{item.label}</span>
               {tabLocked(item.id)
                 ? <Lock size={12} className="shrink-0 hidden lg:block" />
                 : item.byok ? <Chip className="hidden lg:inline-flex">BYOK</Chip>
@@ -1430,13 +1435,15 @@ function App() {
       <div className="p-2.5 lg:p-3 border-t border-rule space-y-0.5">
         <NavFooterLinks collapsed />
       </div>
-    </div>
+    </aside>
   );
 
   // Mobile drawer: the complete nav, reachable from the header's menu button.
   const MobileNavDrawer = () => (
     <div
-      className="md:hidden fixed inset-0 z-[90] flex"
+      id="nav-drawer"
+      tabIndex={-1}
+      className="md:hidden fixed inset-0 z-[90] flex outline-none"
       role="dialog"
       aria-modal="true"
       aria-label="Navigation"
@@ -1463,7 +1470,7 @@ function App() {
           </button>
         </div>
 
-        <nav className="flex-1 overflow-y-auto custom-scrollbar px-3 py-3 space-y-1">
+        <nav aria-label="All sections" className="flex-1 overflow-y-auto custom-scrollbar px-3 py-3 space-y-1">
           {navItems.map((item) => {
             const NavIcon = item.icon;
             const isActive = activeTab === item.id;
@@ -1504,7 +1511,7 @@ function App() {
     const tabs = navItems.filter((n) => n.primary);
     const moreActive = !tabs.some((t) => t.id === activeTab);
     return (
-      <nav className="md:hidden shrink-0 border-t border-rule bg-paper2/95 backdrop-blur-sm safe-bottom">
+      <nav aria-label="Primary" className="md:hidden shrink-0 border-t border-rule bg-paper2/95 backdrop-blur-sm safe-bottom">
         <div className="flex items-stretch">
           {tabs.map((item) => {
             const NavIcon = item.icon;
@@ -1553,7 +1560,7 @@ function App() {
       <Sidebar />
       {navOpen && <MobileNavDrawer />}
 
-      <main className="flex-1 min-w-0 flex flex-col h-full overflow-hidden relative">
+      <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden relative">
         {/* Top Header */}
         <header className="h-14 border-b border-rule bg-paper flex items-center justify-between gap-2 px-3 sm:px-6 shrink-0 z-10">
           <div className="flex items-center gap-2 sm:gap-4 min-w-0">
@@ -1628,6 +1635,7 @@ function App() {
             )}
           </div>
         </header>
+        <main tabIndex={-1} className="flex-1 min-h-0 min-w-0 flex flex-col outline-none">
 
         {/* Persistent Missing Keys Banner — visible on every screen */}
         {keysMissing && activeTab !== 'settings' && (
@@ -2199,6 +2207,7 @@ function App() {
                   </div>
                 )}
 
+                <h1 className="sr-only">Your clips</h1>
                 <JobTimeline info={jobInfo} compact={status !== 'processing'} />
 
                 {status !== 'processing' && processingMedia && (
@@ -2475,12 +2484,12 @@ function App() {
           )}
 
         </div>
+        </main>
 
         {/* Phone navigation. A flex sibling of the scrolling pane, not a fixed
             overlay, so content is never trapped behind it. */}
         <MobileTabBar />
-
-      </main>
+      </div>
 
       {/* Missing API Key Modal */}
       <Modal

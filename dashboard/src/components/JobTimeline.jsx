@@ -37,7 +37,7 @@ export default function JobTimeline({ info, compact = false }) {
           );
         })}
       </ol>
-      <p className={`mt-3 text-sm tabular ${failed ? 'text-danger' : 'text-ink2'}`}>{detail}</p>
+      <p role="status" aria-live="polite" className={`mt-3 text-sm tabular ${failed ? 'text-danger' : 'text-ink2'}`}>{detail}</p>
       {pct != null && !failed && (
         <div className="mt-2 h-1 rounded-full bg-paper3 overflow-hidden" role="progressbar" aria-label="Transcription" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
           <div className="h-full bg-brass transition-[width] duration-200 ease-out" style={{ width: `${pct}%` }} />
