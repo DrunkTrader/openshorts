@@ -85,7 +85,7 @@ p{margin:0 0 1.1rem}
 ul,ol{margin:0 0 1.1rem;padding-left:1.25rem}
 li{margin-bottom:.45rem}
 .vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-.tbl{margin:1.25rem 0 1.5rem;overflow-x:auto}
+.tbl{margin:1.25rem 0 1.5rem;overflow-x:auto;position:relative}
 pre{overflow-x:auto;max-width:100%}
 .tbl:focus-visible,pre:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
 table{width:100%;border-collapse:collapse;font-size:.9rem;white-space:nowrap}
@@ -214,7 +214,10 @@ footer.site .col-title{font-size:.75rem;font-weight:600;letter-spacing:.06em;tex
 footer.site ul{list-style:none;padding:0;margin:0}
 /* Target floors: 24px everywhere, 44px on phones (links set inside a sentence are exempt). */
 footer.site li a,footer.site .more a,.crumbs a{display:inline-flex;align-items:center;min-height:1.75rem}
-@media(max-width:40rem){footer.site li a,footer.site .more a,.crumbs a{min-height:44px}}
+td a,th a{display:inline-flex;align-items:center;min-height:1.75rem}
+input[type=range],.calc .billing button,button,.btn-ghost{min-height:1.75rem}
+@media(max-width:40rem){footer.site li a,footer.site .more a,.crumbs a,td a,th a{min-height:44px;min-width:44px;justify-content:center}
+input[type=range],.calc .billing button,button,.btn-ghost{min-height:44px}}
 footer.site li{margin:0 0 .4rem}
 footer.site .more{margin:0 0 1rem;line-height:1.9}
 footer.site .more a{margin-right:.9rem;white-space:nowrap}

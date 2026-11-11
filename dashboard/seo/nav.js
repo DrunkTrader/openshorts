@@ -213,6 +213,7 @@ export const NAV_CSS = `
 /* Target floors: 24px on desktop, 44px on phones. */
 .osn-top,.osn-dd>summary,.osn-brand{min-height:1.75rem}
 .osn-top{display:inline-flex;align-items:center}
+.osn-gh{min-width:1.75rem;justify-content:center}
 .osn-cta{display:inline-flex;align-items:center}
 @media (max-width:40rem){
   .osn a,.osn summary,.osn-burger,.osn-cta,.osn-brand{min-height:44px}
