@@ -2326,6 +2326,9 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None, replay
         # in size-bounded batches (the full clip band per batch, as a split does).
         detail_items = merge_adjacent(shortlist, windows, transcript_result,
                                       max_span=2 * window_seconds)
+        detail_items = neighbour_context(
+            detail_items, transcript_result,
+            max_chars=int(os.environ.get("DETAIL_NEIGHBOUR_CHARS", "600")))
         if len(detail_items) < len(shortlist):
             print(f"   Merged {len(shortlist)} shortlisted windows into {len(detail_items)} for detail.")
         char_budget = int(os.environ.get("DETAIL_BATCH_CHARS", "9000"))

@@ -303,7 +303,11 @@ Choose the BEST short clips from these shortlisted candidate windows.
 CLIP RULES:
 - Return only valid JSON.
 - Each clip must be {min_secs:g} to {max_secs:g} seconds long, in absolute seconds from the start of the source video.
-- Stay within the candidate window boundaries.
+- A window may carry `context_before` / `context_after`: the lines spoken just
+  outside it. A clip may open in the one and close in the other, so a moment that
+  straddles the window edge stays whole, but it must start and end within
+  [`search_start`, `search_end`] of its window (absolute seconds). Without those
+  fields, stay within `start` and `end`.
 - THE 2-SECOND RULE: the clip MUST open on its strongest moment. If the first
   2 seconds would not stop a cold viewer from scrolling, move the start or skip the clip.
 - Start slightly before the hook and end slightly after the payoff when possible.

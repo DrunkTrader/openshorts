@@ -73,3 +73,32 @@ def test_prompt_size_under_budget():
             video_duration=1800, language="en", min_clips=2, max_clips=6, min_secs=15, max_secs=60,
             windows_json=json.dumps(cs.build_window_payload(batch), ensure_ascii=False))
         assert len(prompt) / 3.5 < 4000, len(prompt)
+
+
+def test_prompt_allows_context_but_bounds_clip():
+    import gemini_worker as gw
+    t = gw.DETAIL_PROMPT_TEMPLATE
+    assert "Stay within the candidate window boundaries" not in t
+    assert "context_before" in t and "context_after" in t
+    assert "search_start" in t and "search_end" in t and "must start and end within" in t
+    assert "THE 2-SECOND RULE" in t and "STANDS ALONE" in t
+    t.format(video_duration=1, language="en", min_clips=1, max_clips=2, min_secs=15, max_secs=60,
+             windows_json="[]")
+
+
+def test_get_viral_clips_sends_context_and_merged_window(main, monkeypatch):
+    seen = []
+
+    def fake_stage(client, model, prompt, schema):
+        if schema is main.gemini_worker.ScoreResponse:
+            ws = json.loads(prompt.split("WINDOWS_JSON:")[-1].split("Return only:")[0])
+            return {"windows": [{"id": w["id"], "start": 0, "end": 1, "score": 90, "reason": "r"} for w in ws]}, None
+        seen.extend(json.loads(prompt.split("CANDIDATE_WINDOWS_JSON:")[-1].split("Return only:")[0]))
+        return {"shorts": []}, None
+
+    monkeypatch.setattr(main, "_run_gemini_stage", fake_stage)
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(main.genai, "Client", lambda api_key=None: object())
+    main.get_viral_clips(_tr(40), 600.0)
+    assert any(w.get("ids") for w in seen)
+    assert all("search_start" in w and w["search_start"] <= w["start"] <= w["end"] <= w["search_end"] for w in seen)
