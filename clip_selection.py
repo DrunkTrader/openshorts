@@ -286,12 +286,12 @@ def build_transcript_windows(transcript_result, video_duration,
 def build_window_payload(windows, heat=None, replay=None):
     """The window dicts sent to the LLM. ``heat`` (twitch_signals.window_heat)
     and ``replay`` (heatmap_signals.window_replay) add their fields only to the
-    windows they cover; extra keys on a window (merged detail windows) pass through."""
+    windows they cover; extra keys on a window (merged detail windows) pass through (a merged window lists its member ids)."""
     heat, replay = heat or {}, replay or {}
     out = []
     for w in windows:
         item = {"id": w["id"], "start": w["start"], "end": w["end"], "text": w["text"]}
-        item.update({k: w[k] for k in ("context_before", "context_after", "search_start", "search_end")
+        item.update({k: w[k] for k in ("ids", "context_before", "context_after", "search_start", "search_end")
                      if k in w})
         h = heat.get(w["id"])
         if h:
@@ -304,6 +304,90 @@ def build_window_payload(windows, heat=None, replay=None):
             item["replay_peak"] = round(r["peak"], 2)
         out.append(item)
     return out
+
+
+def _timed_segments(transcript_result):
+    return [(float(g.get("start", 0)), float(g.get("end", 0)), str(g.get("text") or "").strip())
+            for g in (transcript_result or {}).get("segments", []) if str(g.get("text") or "").strip()]
+
+
+def _text_between(segs, start, end):
+    """Segments lying inside [start, end]: cut by time, never by string match."""
+    return " ".join(t for s, e, t in segs if s >= start - 1e-3 and e <= end + 1e-3)
+
+
+def merge_adjacent(shortlist, windows, transcript_result, max_span):
+    """Merge runs of consecutive shortlisted windows into one detail window.
+
+    A moment that straddles a window seam is whole in neither window. The merged
+    window keeps the first id (``source_window_id``), spans the run and rebuilds
+    its text from the segments inside it, so the 30 s overlap is counted once.
+    A run is cut when it would exceed ``max_span`` seconds. Order follows the
+    best-ranked member of each group, like the shortlist it replaces.
+    """
+    segs = _timed_segments(transcript_result)
+    if not segs:
+        return [dict(w) for w in shortlist]
+    pos = {w["id"]: i for i, w in enumerate(windows)}
+    rank = {w["id"]: r for r, w in enumerate(shortlist)}
+    ordered = sorted((w for w in shortlist if w["id"] in pos), key=lambda w: pos[w["id"]])
+    groups = []
+    for w in ordered:
+        last = groups[-1] if groups else None
+        if last and pos[w["id"]] == pos[last[-1]["id"]] + 1 and w["end"] - last[0]["start"] <= max_span:
+            last.append(w)
+        else:
+            groups.append([w])
+    groups.sort(key=lambda g: min(rank[w["id"]] for w in g))
+    out = []
+    for g in groups:
+        if len(g) == 1:
+            out.append(dict(g[0]))
+            continue
+        start, end = g[0]["start"], g[-1]["end"]
+        out.append({"id": g[0]["id"], "ids": [w["id"] for w in g], "start": start, "end": end,
+                    "text": _text_between(segs, start, end)})
+    return out
+
+
+def neighbour_context(items, transcript_result, max_chars=600):
+    """``items`` plus the spoken lines just outside each (at most ``max_chars``
+    per side, whole segments), as ``context_before`` / ``context_after`` and the
+    seconds they open up: ``search_start`` / ``search_end``."""
+    segs = _timed_segments(transcript_result)
+    out = []
+    for w in items:
+        before, used, lo = [], 0, w["start"]
+        for s, e, t in reversed([x for x in segs if x[1] <= w["start"] + 1e-3]):
+            if used + len(t) > max_chars:
+                break
+            before.insert(0, t)
+            used, lo = used + len(t) + 1, s
+        after, used, hi = [], 0, w["end"]
+        for s, e, t in [x for x in segs if x[0] >= w["end"] - 1e-3]:
+            if used + len(t) > max_chars:
+                break
+            after.append(t)
+            used, hi = used + len(t) + 1, e
+        out.append({**w, "context_before": " ".join(before), "context_after": " ".join(after),
+                    "search_start": round(lo, 3), "search_end": round(hi, 3)})
+    return out
+
+
+def detail_batches(items, max_chars):
+    """Greedy batches of detail items under ``max_chars`` of JSON text (a lone
+    oversized item still goes alone). For small-context local models."""
+    batches, cur, size = [], [], 0
+    for w in items:
+        n = sum(len(str(w.get(k) or "")) for k in ("text", "context_before", "context_after"))
+        if cur and size + n > max_chars:
+            batches.append(cur)
+            cur, size = [], 0
+        cur.append(w)
+        size += n
+    if cur:
+        batches.append(cur)
+    return batches
 
 
 def dedupe_overlapping(shorts, ratio=0.25):
