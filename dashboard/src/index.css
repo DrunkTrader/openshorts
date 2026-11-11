@@ -26,8 +26,10 @@
   /* Editorial type: serif display for h1, tight tracking on every heading. */
   h1 { font-family: var(--font-display); font-weight: 400; letter-spacing: var(--tracking-display); line-height: 1.08; }
   h2, h3 { letter-spacing: -0.02em; line-height: 1.2; }
-  /* Negative tracking on the serif at 18-24px rounds unevenly and opens gaps ("genera ted"). */
-  :where(h2, h3).font-display { letter-spacing: 0; }
+  /* The "genera ted" gap: with default text-rendering the browser rounds each
+     glyph advance to whole pixels (hinting), which opens a visible hole after
+     the narrow "a" in Instrument Serif at 18-24px. Exact advances fix it. */
+  .font-display, h1, h2, h3 { text-rendering: geometricPrecision; }
   .tabular { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
 
   /* Touch: iOS zooms the page whenever a focused field renders below 16px, and
