@@ -50,3 +50,46 @@ def test_prompt_contains_replay_rule_and_template_formats():
     import gemini_worker as gw
     out = gw.SCORE_PROMPT_TEMPLATE.format(video_duration=1, language="en", windows_json="[]")
     assert "replay_heat" in out and "replay_peak" in out
+
+
+def test_payload_attaches_fields_only_when_present():
+    from clip_selection import build_window_payload
+    ws = [{"id": "a", "start": 0, "end": 10, "text": "t"}, {"id": "b", "start": 10, "end": 20, "text": "u"}]
+    out = build_window_payload(ws, None, {"a": {"heat": 0.456, "peak": 0.9}})
+    assert out[0]["replay_heat"] == 0.46 and out[0]["replay_peak"] == 0.9
+    assert "replay_heat" not in out[1] and "viewers_clipped" not in out[1]
+    out = build_window_payload(ws, {"b": {"clips": 2, "views": 9, "spans": [[1, 2]]}}, None)
+    assert out[1]["viewers_clipped"] == 2 and out[1]["viewer_moments"] == [[1, 2]]
+    assert set(out[0]) == {"id", "start", "end", "text"}
+
+
+def _shortlist(main, monkeypatch, replay_heat):
+    import json
+    seen = []
+
+    def fake_stage(client, model, prompt, schema):
+        if schema is main.gemini_worker.ScoreResponse:
+            ws = json.loads(prompt.split("WINDOWS_JSON:")[-1].split("Return only:")[0])
+            return {"windows": [{"id": w["id"], "start": 0, "end": 1, "score": 90 - int(w["id"][-3:]),
+                                 "reason": "r"} for w in ws]}, None
+        ws = json.loads(prompt.split("CANDIDATE_WINDOWS_JSON:")[-1].split("Return only:")[0])
+        seen.extend(w["id"] for w in ws)
+        return {"shorts": []}, None
+
+    monkeypatch.setattr(main, "_run_gemini_stage", fake_stage)
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(main.genai, "Client", lambda api_key=None: object())
+    tr = {"language": "en", "segments": [
+        {"start": i * 15.0, "end": i * 15.0 + 15, "text": f"s {i}",
+         "words": [{"word": "w", "start": i * 15.0, "end": i * 15.0 + 1}]} for i in range(40)]}
+    main.get_viral_clips(tr, 600.0, replay_heat=replay_heat)
+    return seen
+
+
+def test_get_viral_clips_blend_reorders_shortlist(main, monkeypatch):
+    base = _shortlist(main, monkeypatch, None)
+    hot_tail = [{"start_time": 0, "end_time": 450, "value": 0.0}, {"start_time": 450, "end_time": 600, "value": 1.0}]
+    heated = _shortlist(main, monkeypatch, hot_tail)
+    assert set(heated) != set(base)
+    monkeypatch.setenv("REPLAY_HEAT_WEIGHT", "0")
+    assert _shortlist(main, monkeypatch, hot_tail) == base

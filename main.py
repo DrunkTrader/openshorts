@@ -30,7 +30,8 @@ import hook_grounding
 import layout_picker
 import llm_backend
 import twitch_signals
-from clip_selection import (build_transcript_windows, clip_count_targets,
+import heatmap_signals
+from clip_selection import (build_transcript_windows, build_window_payload, clip_count_targets,
                             clip_duration_bounds, dedupe_overlapping,
                             score_batches, shortlist_target,
                             snap_clip_to_words, trim_to_best,
@@ -2201,7 +2202,7 @@ def score_batch_size():
     return 3 if llm_backend.active() else 8
 
 
-def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
+def get_viral_clips(transcript_result, video_duration, viewer_clips=None, replay_heat=None):
     """Two-pass clip selection: score transcript windows, then detail the best.
 
     Windowing gives even coverage on long videos (a single call over the whole
@@ -2212,6 +2213,10 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
     ``viewer_clips`` (``twitch_signals.viewer_clips_for_job``): stretches the
     stream's own viewers clipped. They are shown to both passes on the windows
     that hold them, and the hottest windows are guaranteed a shortlist slot.
+
+    ``replay_heat`` (YouTube's "Most replayed" heatmap from the one
+    extraction): shown on the windows it covers and, with enough coverage,
+    blended into the shortlist order (``heatmap_signals``). Never the only rank.
     """
     language = str(transcript_result.get('language') or 'unknown')
     if llm_backend.active():
@@ -2264,17 +2269,12 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
         if heat:
             print(f"   👀 Viewer clips fall in {len(heat)} window(s).")
 
+        replay = heatmap_signals.window_replay(windows, replay_heat) if replay_heat else {}
+        if replay:
+            print(f"   🔥 Replay heatmap covers {len(replay)} of {len(windows)} window(s).")
+
         def _payload(ws):
-            out = []
-            for w in ws:
-                item = {"id": w["id"], "start": w["start"], "end": w["end"], "text": w["text"]}
-                h = heat.get(w["id"])
-                if h:
-                    item["viewers_clipped"] = h["clips"]
-                    item["viewer_clip_views"] = h["views"]
-                    item["viewer_moments"] = h["spans"][:5]
-                out.append(item)
-            return out
+            return build_window_payload(ws, heat, replay)
 
         def _score_prompt(ws):
             return gemini_worker.SCORE_PROMPT_TEMPLATE.format(
@@ -2288,7 +2288,11 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None):
 
         # Shortlist the top windows; scale with duration so long videos surface
         # more candidates without exploding the detail call.
-        scored.sort(key=lambda w: w.get("score", 0), reverse=True)
+        by_score = sorted(scored, key=lambda w: w.get("score", 0), reverse=True)
+        scored = heatmap_signals.rank_scored(scored, replay, len(windows))
+        if [w.get("id") for w in scored[:target]] != [w.get("id") for w in by_score[:target]]:
+            print(f"   🔥 Replay heat reordered the shortlist: "
+                  f"{[w.get('id') for w in by_score[:target]]} -> {[w.get('id') for w in scored[:target]]}")
         by_id = {w["id"]: w for w in windows}
         shortlist = [by_id[w["id"]] for w in scored[:target] if w.get("id") in by_id]
         if not shortlist:
@@ -2932,7 +2936,9 @@ if __name__ == '__main__':
             print("♻️ Using the clips Gemini picked while the video downloaded.")
             clips_data = early_clips
         elif transcript is not None:
-            clips_data = get_viral_clips(transcript, duration, viewer_clips=viewer_clips)
+            yt = str(source_meta.get('extractor') or '').lower().startswith('youtube')
+            clips_data = get_viral_clips(transcript, duration, viewer_clips=viewer_clips,
+                                         replay_heat=source_meta.get('heatmap') if yt else None)
         else:
             clips_data = get_visual_clips(input_video, duration, viewer_clips=viewer_clips)
 

@@ -283,6 +283,29 @@ def build_transcript_windows(transcript_result, video_duration,
     return windows
 
 
+def build_window_payload(windows, heat=None, replay=None):
+    """The window dicts sent to the LLM. ``heat`` (twitch_signals.window_heat)
+    and ``replay`` (heatmap_signals.window_replay) add their fields only to the
+    windows they cover; extra keys on a window (merged detail windows) pass through."""
+    heat, replay = heat or {}, replay or {}
+    out = []
+    for w in windows:
+        item = {"id": w["id"], "start": w["start"], "end": w["end"], "text": w["text"]}
+        item.update({k: w[k] for k in ("context_before", "context_after", "search_start", "search_end")
+                     if k in w})
+        h = heat.get(w["id"])
+        if h:
+            item["viewers_clipped"] = h["clips"]
+            item["viewer_clip_views"] = h["views"]
+            item["viewer_moments"] = h["spans"][:5]
+        r = replay.get(w["id"])
+        if r:
+            item["replay_heat"] = round(r["heat"], 2)
+            item["replay_peak"] = round(r["peak"], 2)
+        out.append(item)
+    return out
+
+
 def dedupe_overlapping(shorts, ratio=0.25):
     """Drop clips that overlap an already-kept clip by ``ratio`` of the
     shorter one, keeping the higher ``predicted_score`` (earlier on a tie).
