@@ -44,6 +44,18 @@
     -webkit-tap-highlight-color: transparent;
   }
 
+  /* Touch: every control is at least 44x44 on a phone (WCAG 2.5.5). Links set
+     inside a sentence keep their flow: padding grows the hit box to 44px and an
+     equal negative margin gives the space back to the line. */
+  @media (max-width: 640px) {
+    button, [role='button'], a[href] { min-height: 44px; min-width: 44px; }
+    a[href]:not(.btn-primary):not(.btn-ghost):not(.btn-quiet):not(.btn-danger) { display: inline-flex; align-items: center; }
+    p a[href], li a[href], span a[href], label a[href] {
+      display: inline-block; max-width: 100%; vertical-align: baseline;
+      padding: 12px 9px; margin: -12px -9px;
+    }
+  }
+
   ::selection {
     background: var(--color-accent);
     color: var(--color-accent-ink);
