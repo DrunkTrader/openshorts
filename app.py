@@ -2705,8 +2705,16 @@ async def lifespan(app: FastAPI):
         # a single job-failure alert is easy to miss and ingest stays broken
         # until someone tops the balance up.
         asyncio.create_task(_alerts.proxy_watch_loop())
+    bot_task = None
+    if not BILLING_ENABLED and os.environ.get("TELEGRAM_INTAKE_TOKEN"):
+        # Self-host intake bot: polls Telegram, talks to this API over loopback.
+        import telegram_bot
+        bot_task = asyncio.create_task(
+            telegram_bot.run_from_env(is_active=lambda: not _draining))
     yield
     # Cleanup (optional: cancel worker)
+    if bot_task:
+        bot_task.cancel()
 
 app = FastAPI(lifespan=lifespan)
 
