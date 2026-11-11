@@ -39,7 +39,10 @@ export default function KeyInput({ onKeySet, savedKey }) {
                         className="input-field pr-12 font-mono"
                     />
                     <button
+                        type="button"
                         onClick={() => setIsVisible(!isVisible)}
+                        aria-label={isVisible ? 'hide key' : 'show key'}
+                        aria-pressed={isVisible}
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-ink transition-colors"
                     >
                         {isVisible ? <EyeOff size={18} /> : <Eye size={18} />}

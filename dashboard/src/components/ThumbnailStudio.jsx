@@ -48,7 +48,7 @@ function DragDropZone({ label, accept, onFile, file, onClear, icon }) {
             <p className="text-sm text-ink truncate">{file.name}</p>
             <p className="readout mt-0.5">{(file.size / 1024 / 1024).toFixed(1)} MB</p>
           </div>
-          <button onClick={onClear} className="text-muted hover:text-ink transition-colors">
+          <button onClick={onClear} aria-label="remove file" className="text-muted hover:text-ink transition-colors">
             <X size={16} />
           </button>
         </div>

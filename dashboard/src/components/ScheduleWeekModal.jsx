@@ -266,6 +266,7 @@ export default function ScheduleWeekModal({ isOpen, onClose, clips, jobId, uploa
                 <div className="flex items-center gap-2">
                     <button
                         onClick={() => setStartOffset(Math.max(1, startOffset - 1))}
+                        aria-label="start one day earlier"
                         disabled={startOffset <= 1 || scheduling}
                         className="btn-quiet px-2 py-2 disabled:opacity-40 disabled:cursor-not-allowed"
                     >
@@ -280,6 +281,7 @@ export default function ScheduleWeekModal({ isOpen, onClose, clips, jobId, uploa
                     </span>
                     <button
                         onClick={() => setStartOffset(startOffset + 1)}
+                        aria-label="start one day later"
                         disabled={scheduling}
                         className="btn-quiet px-2 py-2 disabled:opacity-40 disabled:cursor-not-allowed"
                     >
