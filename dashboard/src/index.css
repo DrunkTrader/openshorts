@@ -26,6 +26,8 @@
   /* Editorial type: serif display for h1, tight tracking on every heading. */
   h1 { font-family: var(--font-display); font-weight: 400; letter-spacing: var(--tracking-display); line-height: 1.08; }
   h2, h3 { letter-spacing: -0.02em; line-height: 1.2; }
+  /* Negative tracking on the serif at 18-24px rounds unevenly and opens gaps ("genera ted"). */
+  :where(h2, h3).font-display { letter-spacing: 0; }
   .tabular { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
 
   /* Touch: iOS zooms the page whenever a focused field renders below 16px, and
@@ -54,6 +56,14 @@
       display: inline-block; max-width: 100%; vertical-align: baseline;
       padding: 12px 9px; margin: -12px -9px;
     }
+  }
+
+  /* Disclosures and sliders are controls: 24px floor everywhere, 44px on phones. */
+  summary { min-height: 24px; }
+  input[type='range'] { min-height: 24px; }
+  @media (max-width: 640px) {
+    summary { min-height: 44px; display: flex; align-items: center; }
+    input[type='range'] { min-height: 44px; }
   }
 
   ::selection {
