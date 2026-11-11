@@ -283,6 +283,72 @@ def build_transcript_windows(transcript_result, video_duration,
     return windows
 
 
+def speech_density(transcript_result, video_duration, stretch=30.0):
+    """``[(start, end, words_per_min)]`` over the whole timeline in ``stretch``
+    steps (the last one may be shorter). A segment's words spread over its
+    duration, so a transcript without word timestamps still counts."""
+    duration = float(video_duration or 0)
+    segs = [(float(g.get("start", 0)), float(g.get("end", 0)), len(str(g.get("text") or "").split()))
+            for g in (transcript_result or {}).get("segments", [])]
+    out, a = [], 0.0
+    while a < duration - 1e-6:
+        b = min(a + stretch, duration)
+        words = 0.0
+        for s, e, n in segs:
+            if n and e > s:
+                words += n * max(0.0, min(e, b) - max(s, a)) / (e - s)
+            elif n and a <= s < b:
+                words += n
+        out.append((round(a, 3), round(b, 3), words / ((b - a) / 60.0)))
+        a = b
+    return out
+
+
+def silent_stretches(transcript_result, video_duration, min_len=30.0, max_wpm=5.0):
+    """``[(start, end)]`` runs of consecutive stretches at or under ``max_wpm``
+    that last at least ``min_len`` seconds."""
+    runs, cur = [], None
+    for a, b, wpm in speech_density(transcript_result, video_duration):
+        if wpm <= max_wpm:
+            cur = (cur[0], b) if cur else (a, b)
+        elif cur:
+            runs.append(cur)
+            cur = None
+    if cur:
+        runs.append(cur)
+    return [r for r in runs if r[1] - r[0] >= min_len - 1e-6]
+
+
+def build_timeline_windows(transcript_result, video_duration, signals=None,
+                           window_seconds=90, overlap_seconds=30):
+    """Windows over the whole timeline: the speech windows of
+    ``build_transcript_windows`` (unchanged) plus ``kind="nonspeech"`` windows
+    (``window_ns_001``, at most ``window_seconds``, no ``text``) over silent
+    stretches of 30 s or more, with their signals attached
+    (``silent_signals.window_signals``). A speech window that lies inside a
+    silent stretch (stray words, not speech) is dropped. Silent windows are not
+    ranked here; ``silent_signals.score_nonspeech`` does that."""
+    import silent_signals
+
+    has_text = any(str(g.get("text") or "").strip() for g in (transcript_result or {}).get("segments", []))
+    speech = build_transcript_windows(transcript_result, video_duration,
+                                      window_seconds, overlap_seconds) if has_text else []
+    stretches = silent_stretches(transcript_result, video_duration)
+    if not stretches:
+        return speech
+    speech = [w for w in speech
+              if not any(a - 1e-3 <= w["start"] and w["end"] <= b + 1e-3 for a, b in stretches)]
+    silent = []
+    for a, b in stretches:
+        n = max(1, math.ceil((b - a) / window_seconds - 1e-9))
+        step = (b - a) / n
+        for i in range(n):
+            silent.append({"id": f"window_ns_{len(silent) + 1:03d}", "kind": "nonspeech",
+                           "start": round(a + i * step, 3), "end": round(a + (i + 1) * step, 3)})
+    silent_signals.window_signals(silent, signals)
+    return speech + silent
+
+
 def build_window_payload(windows, heat=None, replay=None):
     """The window dicts sent to the LLM. ``heat`` (twitch_signals.window_heat)
     and ``replay`` (heatmap_signals.window_replay) add their fields only to the
