@@ -83,9 +83,10 @@ p{margin:0 0 1.1rem}
 .tldr p:last-child{margin-bottom:0}
 ul,ol{margin:0 0 1.1rem;padding-left:1.25rem}
 li{margin-bottom:.45rem}
-table{width:100%;border-collapse:collapse;margin:1.25rem 0 1.5rem;font-size:.9rem;
-  display:block;overflow-x:auto;white-space:nowrap}
-@media(min-width:52rem){table{display:table;white-space:normal}}
+.tbl{margin:1.25rem 0 1.5rem;overflow-x:auto}
+.tbl:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
+table{width:100%;border-collapse:collapse;font-size:.9rem;white-space:nowrap}
+@media(min-width:52rem){table{white-space:normal}}
 th,td{text-align:left;padding:.7rem .9rem;border-bottom:1px solid var(--rule);vertical-align:top}
 th{font-size:.7rem;font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase;
   color:var(--muted);font-weight:500}
@@ -124,6 +125,8 @@ td.os{color:var(--ink)}
 .cta-act{display:flex;flex-direction:column;align-items:flex-start;gap:.35rem}
 .cta-micro{font-size:.72rem;color:var(--muted);max-width:18rem;line-height:1.4}
 .best-alts ol{margin:0 0 .4rem}
+.plans td a:not(.btn-primary){display:inline-flex;align-items:center;min-height:1.75rem;padding:0 .25rem}
+@media(max-width:36rem){.plans td a{min-height:44px}}
 .plans .btn-primary{display:inline-block;text-decoration:none;white-space:nowrap}
 .cta-box .btn:hover{color:var(--accent-ink);filter:brightness(1.06)}
 .lede{font-size:1.05rem;color:var(--ink2);max-width:44rem;margin:0 0 1.5rem}
@@ -622,6 +625,18 @@ const relatedBlock = (related, title) =>
         )
         .join('')}</div>`
 
+// A table wider than the screen scrolls inside a focusable, named region so a
+// keyboard user can scroll it. Done once here, not in each page's markup.
+function scrollableTables(html) {
+  return html.replace(/<table\b[^>]*>[\s\S]*?<\/table>/g, (tbl, at) => {
+    const cap = tbl.match(/<caption[^>]*>([\s\S]*?)<\/caption>/)
+    const heads = [...html.slice(0, at).matchAll(/<h[23][^>]*>([\s\S]*?)<\/h[23]>/g)]
+    const raw = cap ? cap[1] : heads.length ? heads[heads.length - 1][1] : 'Comparison'
+    const label = raw.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().replace(/"/g, '&quot;')
+    return `<div class="tbl" role="region" tabindex="0" aria-label="${label}">${tbl}</div>`
+  })
+}
+
 export function renderPage(page, related = [], { cta = true, toolScript = '', built = null } = {}) {
   const canonical = `${SITE.url}${page.path}`
   const t = strings(page)
@@ -633,7 +648,7 @@ export function renderPage(page, related = [], { cta = true, toolScript = '', bu
     ),
   ].join(' <span aria-hidden="true">/</span> ')
 
-  return `<!doctype html>
+  return scrollableTables(`<!doctype html>
 <html lang="${page.lang || 'en'}">
 <head>
 <meta charset="UTF-8">
@@ -695,7 +710,7 @@ ${relatedBlock(related, page.relatedTitle || t.related)}
 ${footer(t, built)}
 ${(page.tool || page.pasteLink) && toolScript ? `<script type="module" src="${esc(toolScript)}"></script>` : ''}
 </body>
-</html>`
+</html>`)
 }
 
 export { esc }

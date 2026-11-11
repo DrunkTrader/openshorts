@@ -160,6 +160,7 @@ export const NAV_CSS = `
 .osn-menu{flex:1;display:flex;align-items:center;justify-content:space-between;gap:1.5rem;min-width:0}
 .osn-list{list-style:none;margin:0;padding:0;display:flex;align-items:center;gap:1.4rem}
 .osn-item{margin:0;position:relative}
+.osn-login{display:inline-flex;align-items:center;min-height:1.75rem}
 .osn-top,.osn-dd>summary,.osn-login{color:var(--color-muted,oklch(64% 0.012 262));text-transform:lowercase;white-space:nowrap;cursor:pointer;transition:color .15s}
 .osn-top:hover,.osn-dd>summary:hover,.osn-dd[open]>summary,.osn-login:hover{color:var(--color-ink,oklch(96% 0.006 262))}
 .osn-top:focus-visible,.osn-dd>summary:focus-visible,.osn-login:focus-visible,.osn-cta:focus-visible,.osn-brand:focus-visible,
