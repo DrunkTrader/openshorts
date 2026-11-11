@@ -44,3 +44,9 @@ def test_blend_zero_weight_is_identity(monkeypatch):
     assert hs.blend(80, 1.0, 0) == 0.8
     monkeypatch.delenv("REPLAY_HEAT_WEIGHT")
     assert abs(hs.blend(100, 0.0) - 0.7) < 1e-9
+
+
+def test_prompt_contains_replay_rule_and_template_formats():
+    import gemini_worker as gw
+    out = gw.SCORE_PROMPT_TEMPLATE.format(video_duration=1, language="en", windows_json="[]")
+    assert "replay_heat" in out and "replay_peak" in out

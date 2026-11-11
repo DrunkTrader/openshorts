@@ -273,6 +273,9 @@ Rules:
   live viewers clipped that stretch themselves. That is strong evidence the
   moment lands even when the transcript looks thin (a chase, a crash, a scream),
   so weigh it up; the window still has to make sense to a cold viewer.
+- A window may carry `replay_heat` / `replay_peak` (0-1, relative to this video,
+  coarse, and biased towards the early minutes): mild evidence the stretch is
+  rewatched. Never decide on it alone; ignore it when absent.
 
 TRANSCRIPT_LANGUAGE: {language}
 VIDEO_DURATION_SECONDS: {video_duration}
