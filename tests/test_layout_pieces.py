@@ -20,7 +20,7 @@ def sampled(monkeypatch):
     return calls
 
 
-@pytest.mark.parametrize("k", [1, 3, 12, 20])
+@pytest.mark.parametrize("k", [1, 3, 5, 7, 12, 20])
 def test_exactly_twelve_frames_each_from_a_listed_piece(sampled, k):
     paths = [f"p{i}.mp4" for i in range(k)]
     frames = layout_picker.sample_frames_pieces(paths)
@@ -29,11 +29,23 @@ def test_exactly_twelve_frames_each_from_a_listed_piece(sampled, k):
     if k <= 12:
         assert {p for p, _ in sampled} == set(paths)
         assert max(n for _, n in sampled) - min(n for _, n in sampled) <= 1
+        assert sum(n for _, n in sampled) == 12  # the remainder is shared out, not dropped
 
 
 def test_twenty_pieces_are_spread_not_the_first_twelve(sampled):
     layout_picker.sample_frames_pieces([f"p{i}.mp4" for i in range(20)])
     assert sampled[-1][0] == "p18.mp4" and sampled[0][0] == "p0.mp4"
+
+
+def test_pieces_path_forwards_the_1024px_width(monkeypatch):
+    real = {}
+    monkeypatch.setattr(layout_picker, "sample_frames",
+                        lambda path, n=None, width=None: real.setdefault("w", set()).add(width) or [b"x"] * n)
+    layout_picker.sample_frames_pieces(["a.mp4", "b.mp4"], width=layout_picker.SAMPLE_WIDTH)
+    assert real["w"] == {1024}
+    real.clear()
+    layout_picker.sample_frames_pieces(["a.mp4", "b.mp4"])
+    assert real["w"] == {None}  # default is resolved inside sample_frames: SAMPLE_WIDTH
 
 
 def test_width_stays_1024_and_prompt_is_the_shared_one():
@@ -90,3 +102,30 @@ def test_apply_never_turns_an_explicit_choice_off(monkeypatch):
     monkeypatch.setattr(split_layout, "ENABLED", True)
     layout_picker.apply("none")
     assert split_layout.ENABLED is True
+
+
+def test_subtitle_probe_honours_skip_analysis(monkeypatch):
+    seen = {"pick": [], "detect": []}
+    monkeypatch.setattr(layout_picker, "ENABLED", False)
+    monkeypatch.setattr(burned_subtitles, "detect", lambda path: seen["detect"].append(path) or 0.8)
+    band = range_ingest.probe_pieces("/job", PIECES, 9 / 16, lambda *a: False,
+                                     lambda p: (1920, 1080), True, skip_analysis=True)
+    assert band is None and seen["detect"] == []
+
+
+def test_range_path_never_opens_the_missing_whole_source():
+    import inspect
+    src = inspect.getsource(range_ingest)
+    assert "VideoCapture" not in src and "CAP_PROP" not in src
+    opened = []
+    range_ingest.probe_pieces("/job", PIECES, 9 / 16, lambda *a: True,
+                              lambda p: opened.append(p) or (1920, 1080), True)
+    assert opened == ["/job/T.piece_1.mp4"]  # the first piece, never the source
+
+
+def test_hook_grounding_receives_absolute_start_and_end():
+    import re
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "main.py").read_text()
+    assert "hook_grounding.reground(clip_final_path, clip, transcript, start, end)" in src
+    assert re.search(r"start = clip\['start'\]\s+end = clip\['end'\]", src)  # source seconds, not piece-relative
