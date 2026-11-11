@@ -390,6 +390,47 @@ def detail_batches(items, max_chars):
     return batches
 
 
+def bound_clips(shorts, items, video_duration, min_secs, max_secs):
+    """Hold the model's clips to what the prompt only asked of it.
+
+    Returns ``(kept, notes)``; ``notes`` are short reasons, never transcript
+    text. A clip with end <= start is dropped (never repaired); the rest are
+    clamped to [0, duration] and to the [search_start, search_end] of their
+    source window (a merged window answers to any member id), dropped when what
+    is left is under ``min_secs`` and trimmed to ``max_secs`` keeping the start.
+    """
+    owner = {}
+    for w in items:
+        for i in w.get("ids") or [w["id"]]:
+            owner[i] = w
+    kept, notes = [], []
+    for c in shorts:
+        try:
+            a, b = float(c.get("start", 0)), float(c.get("end", 0))
+        except (TypeError, ValueError):
+            notes.append("dropped a clip with a non-numeric start/end")
+            continue
+        tag = c.get("source_window_id") or "?"
+        if not b > a:
+            notes.append(f"dropped {tag}: end <= start")
+            continue
+        lo, hi = 0.0, float(video_duration)
+        w = owner.get(str(c.get("source_window_id") or ""))
+        if w is not None:
+            lo, hi = max(lo, w.get("search_start", w["start"])), min(hi, w.get("search_end", w["end"]))
+        na, nb = min(max(a, lo), hi), min(max(b, lo), hi)
+        if (na, nb) != (a, b):
+            notes.append(f"clamped {tag}: {a:g}-{b:g} -> {na:g}-{nb:g}")
+        if nb - na < min_secs:
+            notes.append(f"dropped {tag}: under {min_secs:g}s after clamping")
+            continue
+        if nb - na > max_secs:
+            nb = na + max_secs
+            notes.append(f"trimmed {tag} to {max_secs:g}s")
+        kept.append({**c, "start": round(na, 3), "end": round(nb, 3)})
+    return kept, notes
+
+
 def dedupe_overlapping(shorts, ratio=0.25):
     """Drop clips that overlap an already-kept clip by ``ratio`` of the
     shorter one, keeping the higher ``predicted_score`` (earlier on a tie).

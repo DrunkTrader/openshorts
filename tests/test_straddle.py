@@ -102,3 +102,44 @@ def test_get_viral_clips_sends_context_and_merged_window(main, monkeypatch):
     main.get_viral_clips(_tr(40), 600.0)
     assert any(w.get("ids") for w in seen)
     assert all("search_start" in w and w["search_start"] <= w["start"] <= w["end"] <= w["search_end"] for w in seen)
+
+
+def _bound(shorts, items=None, dur=600.0):
+    items = items if items is not None else [
+        {"id": "window_001", "ids": ["window_001", "window_002"], "start": 100, "end": 250,
+         "search_start": 80, "search_end": 270}]
+    return cs.bound_clips(shorts, items, dur, 15.0, 60.0)
+
+
+def _c(a, b, wid="window_001"):
+    return {"start": a, "end": b, "source_window_id": wid, "predicted_score": 70}
+
+
+def test_bound_drops_reversed_clip_without_repair():
+    kept, notes = _bound([_c(100, 90)])
+    assert kept == [] and "end <= start" in notes[0]
+
+
+def test_bound_clamps_to_window_search_span():
+    kept, _ = _bound([_c(100, 400)])  # 100-270 clamped, then trimmed to 60 keeping the start
+    assert (kept[0]["start"], kept[0]["end"]) == (100, 160)
+    kept, notes = _bound([_c(60, 110)])  # starts before search_start
+    assert (kept[0]["start"], kept[0]["end"]) == (80, 110) and "clamped" in notes[0]
+    kept, _ = _bound([_c(100, 130, "window_002")])  # member id of a merged window
+    assert len(kept) == 1
+
+
+def test_bound_clamps_to_duration_and_drops_short():
+    assert _bound([_c(-20, 30)], items=[])[0][0]["start"] == 0.0
+    assert _bound([_c(-20, 30)], items=[])[0][0]["end"] == 30
+    assert _bound([_c(590, 700)], items=[])[0] == []  # 10 s left on a 600 s video
+
+
+def test_bound_drops_clip_outside_its_window():
+    kept, notes = _bound([_c(400, 450)])
+    assert kept == [] and "under 15s" in notes[-1]
+
+
+def test_bound_trims_long_clip_keeping_start():
+    kept, notes = _bound([_c(0, 300)], items=[])
+    assert (kept[0]["start"], kept[0]["end"]) == (0, 60) and "trimmed" in notes[0]
