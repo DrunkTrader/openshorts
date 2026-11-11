@@ -48,9 +48,9 @@ export default function ApiKeysCard() {
 
   return (
     <div className="card p-6">
-      <h3 className="font-display lowercase text-lg text-ink mb-1 flex items-center gap-2">
+      <h2 className="font-display lowercase text-lg text-ink mb-1 flex items-center gap-2">
         <KeyRound size={16} className="text-brass" /> API keys
-      </h3>
+      </h2>
       <p className="text-muted text-sm mb-4">
         Keys for CLI clients, scripts and the REST API (see &ldquo;Connect an agent&rdquo; above).
         Apps connected through claude.ai or ChatGPT show up here too: revoking a key disconnects
@@ -101,7 +101,7 @@ export default function ApiKeysCard() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') createKey(); }}
-              placeholder="Key name (e.g. n8n, claude)"
+              aria-label="Key name" placeholder="Key name (e.g. n8n, claude)"
               className="input-field flex-1 text-sm"
               maxLength={60}
             />

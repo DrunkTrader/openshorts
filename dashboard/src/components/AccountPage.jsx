@@ -272,7 +272,7 @@ export default function AccountPage() {
 
       {topups.length > 0 && (
         <div className="card p-6">
-          <h3 className="font-display lowercase text-lg text-ink mb-1 flex items-center gap-2"><Plus size={16} className="text-brass" /> Buy more minutes</h3>
+          <h2 className="font-display lowercase text-lg text-ink mb-1 flex items-center gap-2"><Plus size={16} className="text-brass" /> Buy more minutes</h2>
           <p className="text-muted text-sm mb-4 lowercase">Top-ups never expire while your plan is active.</p>
           <div className="grid grid-cols-2 gap-3">
             {topups.map((t) => (

@@ -584,7 +584,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                   type="text"
                   value={manualTitle}
                   onChange={(e) => setManualTitle(e.target.value)}
-                  placeholder="Enter your YouTube title..."
+                  aria-label="YouTube title" placeholder="Enter your YouTube title..."
                   className="input-field text-sm mb-4"
                   maxLength={70}
                 />
@@ -657,7 +657,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                       value={chatInput}
                       onChange={(e) => setChatInput(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleRefine()}
-                      placeholder="Make them more clickbait..."
+                      aria-label="Refine thumbnails" placeholder="Make them more clickbait..."
                       className="input-field text-xs flex-1"
                       disabled={isRefining}
                     />
@@ -824,7 +824,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                 <textarea
                   value={extraPrompt}
                   onChange={(e) => setExtraPrompt(e.target.value)}
-                  placeholder="e.g. Use red and black colors, dramatic lighting, include money emojis..."
+                  aria-label="Thumbnail instructions" placeholder="e.g. Use red and black colors, dramatic lighting, include money emojis..."
                   className="input-field text-sm resize-none h-20"
                 />
               </div>
@@ -1086,6 +1086,7 @@ export default function ThumbnailStudio({ geminiApiKey, uploadPostKey, uploadUse
                 <textarea
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
+                  aria-label="Video description"
                   placeholder={mode === 'video'
                     ? "Click 'Generate Description' to auto-generate with chapters, or write your own..."
                     : "Write your YouTube video description here..."

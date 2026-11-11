@@ -464,7 +464,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                       type="url"
                       value={url}
                       onChange={(e) => setUrl(e.target.value)}
-                      placeholder="https://your-website.com"
+                      aria-label="Website URL" placeholder="https://your-website.com"
                       className="input-field pl-10"
                       onKeyDown={(e) => e.key === 'Enter' && handleAnalyze()}
                     />
@@ -482,7 +482,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                   onChange={(e) => setDescription(e.target.value)}
                   rows={2}
                   className="input-field resize-none text-sm"
-                  placeholder="e.g. artisan pizzeria in Madrid, productivity coach, sportswear store, meditation app..."
+                  aria-label="Product or business description" placeholder="e.g. artisan pizzeria in Madrid, productivity coach, sportswear store, meditation app..."
                 />
               </div>
 
@@ -559,15 +559,15 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
             {/* Info cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="card p-4">
-                <h3 className="eyebrow">Deep Research</h3>
+                <h2 className="eyebrow">Deep Research</h2>
                 <p className="text-xs text-muted mt-2">AI analyzes your product via URL scraping + web research, or generates directly from your description.</p>
               </div>
               <div className="card p-4">
-                <h3 className="eyebrow">Pain Point Scripts</h3>
+                <h2 className="eyebrow">Pain Point Scripts</h2>
                 <p className="text-xs text-muted mt-2">Generates hook-problem-solution scripts targeting your audience&apos;s real pain points.</p>
               </div>
               <div className="card p-4">
-                <h3 className="eyebrow">AI Actor Videos</h3>
+                <h2 className="eyebrow">AI Actor Videos</h2>
                 <p className="text-xs text-muted mt-2">Realistic AI-generated actors with lip-sync, b-roll, and viral subtitles. From ~$0.50/video.</p>
               </div>
             </div>
@@ -1008,7 +1008,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                   onChange={(e) => { setActorDescription(e.target.value); setActorOptions([]); }}
                   rows={2}
                   className="input-field resize-none text-sm"
-                  placeholder="e.g. A young woman in her late 20s, dark hair, casual outfit..."
+                  aria-label="Actor description" placeholder="e.g. A young woman in her late 20s, dark hair, casual outfit..."
                 />
 
 

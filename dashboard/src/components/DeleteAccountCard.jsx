@@ -70,9 +70,9 @@ export default function DeleteAccountCard() {
 
   return (
     <div className="card p-6">
-      <h3 className="font-display lowercase text-lg text-ink mb-1 flex items-center gap-2">
+      <h2 className="font-display lowercase text-lg text-ink mb-1 flex items-center gap-2">
         <Trash2 size={16} className="text-danger" /> Delete account
-      </h3>
+      </h2>
       <p className="text-muted text-sm">
         Close your OpenShorts account and erase everything we hold about you. This
         cannot be undone.

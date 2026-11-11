@@ -1340,7 +1340,10 @@ function App() {
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('keydown', onKey);
-      if (opener instanceof HTMLElement && document.contains(opener)) opener.focus();
+      // The tab bar remounts while the drawer is open, so the original node may be
+      // gone: fall back to the control that opens the drawer.
+      const back = opener instanceof HTMLElement && document.contains(opener) ? opener : document.getElementById('more-sections-btn');
+      back?.focus();
     };
   }, [navOpen]);
 
@@ -1533,6 +1536,7 @@ function App() {
             );
           })}
           <button
+            id="more-sections-btn"
             onClick={() => setNavOpen(true)}
             aria-label="more sections"
             aria-expanded={navOpen}
@@ -1771,7 +1775,7 @@ function App() {
                       value={uploadPostKey}
                       onChange={(e) => setUploadPostKey(e.target.value)}
                       className="input-field"
-                      placeholder="ey..."
+                      aria-label="Upload-Post API key" placeholder="ey..."
                     />
                     <button onClick={fetchUserProfiles} className="btn-quiet py-2 px-4 text-sm">
                       Connect
@@ -1826,7 +1830,7 @@ function App() {
                       value={elevenLabsKey}
                       onChange={(e) => setElevenLabsKey(e.target.value)}
                       className="input-field"
-                      placeholder="sk_..."
+                      aria-label="ElevenLabs API key" placeholder="sk_..."
                     />
                     <button
                       onClick={() => {
@@ -1884,7 +1888,7 @@ function App() {
                       value={falKey}
                       onChange={(e) => setFalKey(e.target.value)}
                       className="input-field"
-                      placeholder="fal_..."
+                      aria-label="fal.ai API key" placeholder="fal_..."
                     />
                     <button
                       onClick={() => {
@@ -1961,7 +1965,7 @@ function App() {
                     <div className="w-10 h-10 rounded-input bg-paper3 flex items-center justify-center">
                       <Upload size={18} className="text-brass" />
                     </div>
-                    <h3 className="font-medium text-ink lowercase">1. Drop your videos</h3>
+                    <h2 className="font-medium text-ink lowercase">1. Drop your videos</h2>
                     <p className="text-xs text-muted leading-relaxed">
                       Put your long-form vertical footage in the watched folder. The skill picks one video per run.
                     </p>
@@ -1971,7 +1975,7 @@ function App() {
                     <div className="w-10 h-10 rounded-input bg-paper3 flex items-center justify-center">
                       <Users size={18} className="text-brass" />
                     </div>
-                    <h3 className="font-medium text-ink lowercase">2. AI clippers work</h3>
+                    <h2 className="font-medium text-ink lowercase">2. AI clippers work</h2>
                     <p className="text-xs text-muted leading-relaxed">
                       Whisper transcribes, Gemini 3 Flash spots viral beats, FFmpeg cuts each clip and adds a hook overlay.
                     </p>
@@ -1981,7 +1985,7 @@ function App() {
                     <div className="w-10 h-10 rounded-input bg-paper3 flex items-center justify-center">
                       <CheckCircle2 size={18} className="text-brass" />
                     </div>
-                    <h3 className="font-medium text-ink lowercase">3. You validate, it ships</h3>
+                    <h2 className="font-medium text-ink lowercase">3. You validate, it ships</h2>
                     <p className="text-xs text-muted leading-relaxed">
                       Approve the candidates you like and the skill auto-publishes them to TikTok, Reels and YouTube Shorts via Upload-Post.
                     </p>
@@ -2540,7 +2544,7 @@ function App() {
                 </ol>
                 <input
                   type="text"
-                  placeholder="Paste your Gemini API key here..."
+                  aria-label="Gemini API key" placeholder="Paste your Gemini API key here..."
                   className="input-field"
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && e.target.value.trim()) {
@@ -2571,7 +2575,7 @@ function App() {
                 </ol>
                 <input
                   type="text"
-                  placeholder="Paste your Upload-Post API key here..."
+                  aria-label="Upload-Post API key" placeholder="Paste your Upload-Post API key here..."
                   className="input-field"
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && e.target.value.trim()) {
