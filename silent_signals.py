@@ -40,12 +40,13 @@ def window_signals(windows, signals):
     for w in windows:
         r = replay.get(w["id"])
         w["heat"] = round(r["heat"], 3) if r else None
-        w["audio_energy"], w["cut_density"] = None, None
+        w["audio_energy"], w["cut_density"], w["peak_energy"] = None, None, None
         w["peak"] = round(r["peak_at"], 2) if r else None
         lo, hi = int(w["start"] // step), min(len(curve), int(w["end"] // step) + 1)
         seg = curve[lo:hi]
         if seg:
             w["audio_energy"] = round(sum(seg) / len(seg), 3)
+            w["peak_energy"] = round(max(seg), 3)
             if max(seg) > 0:
                 w["peak"] = round((lo + seg.index(max(seg)) + 0.5) * step, 2)
     return windows
@@ -84,18 +85,72 @@ def score_nonspeech(windows):
     return sorted(ws, key=lambda w: w["score_pct"], reverse=True)
 
 
-def merge_rankings(speech_ranked, silent_ranked, n):
-    """The global top ``n`` over both groups, best first.
+def speech_min_score():
+    """LLM score a speech window needs to count as usable (``SILENT_SPEECH_MIN_SCORE``,
+    default 50: the scoring prompt puts filler under 30 and the clippable at 70+)."""
+    return _weight("SILENT_SPEECH_MIN_SCORE", 50.0)
 
-    Each list is already best first; an item's rank within its own group becomes
-    a percentile, so neither group starves and the shortlist is exactly ``n``
-    whenever there are ``n`` windows (never "up to K per group")."""
-    scored = []
-    for group, items in ((0, speech_ranked), (1, silent_ranked)):
-        for i, it in enumerate(items):
-            scored.append((-(1 - (i + 0.5) / len(items)), group, i, it))
-    scored.sort(key=lambda t: t[:3])
-    return [t[3] for t in scored[:n]]
+
+def energy_bar(curve, percentile=None):
+    """The value a window's loudest second must reach to count as a real moment:
+    the ``SILENT_BAR_PERCENTILE`` (default 90) of the job's WHOLE energy curve,
+    speech included, not of the silent windows alone. None without a curve."""
+    if not curve:
+        return None
+    pct = percentile if percentile is not None else _weight("SILENT_BAR_PERCENTILE", 90.0)
+    ordered = sorted(curve)
+    return ordered[min(len(ordered) - 1, int(len(ordered) * min(pct, 100.0) / 100.0))]
+
+
+def passes_bar(w, bar, heat_bar=0.5):
+    """A non-speech window with its own evidence: a loudest second at or above
+    ``bar`` (``energy_bar``), or a replay heat of at least ``heat_bar`` (0-1)."""
+    pe = w.get("peak_energy")
+    return (pe is not None and bar is not None and pe >= bar) or \
+        (w.get("heat") is not None and w["heat"] >= heat_bar)
+
+
+def merge_rankings(speech_ranked, silent_ranked, n, speech_ok=None, silent_ok=None):
+    """The shortlist: ``n`` windows out of both groups, best first; every window
+    of both groups gets ``rank_score`` (0-1) from the merged order.
+
+    One global ranking over every window, never "up to K per batch": each list
+    is best first, an item's rank in its own group is a percentile
+    (``1 - (i + .5) / len``), and the top ``n`` by that percentile is taken. A
+    percentile alone starves a small group (a lone strong silent stretch always
+    scores 0.5), so a group that has at least one window passing its own bar
+    (``speech_ok`` / ``silent_ok``, a score or signal not relative to the group)
+    is guaranteed ``max(1, round(n * its share of all windows))`` slots, taken
+    from its passing windows; the rest of the slots go by global percentile.
+    A group with nothing passing its bar gets no reserved slot."""
+    groups = [(0, list(speech_ranked), speech_ok), (1, list(silent_ranked), silent_ok)]
+    total = sum(len(g[1]) for g in groups)
+    entries = []   # (neg percentile, group, rank, window)
+    passing, take = {}, {}
+    for gi, items, ok in groups:
+        for i, w in enumerate(items):
+            entries.append((-(1 - (i + 0.5) / len(items)), gi, i, w))
+        passing[gi] = [i for i, w in enumerate(items) if ok is not None and ok(w)]
+        if passing[gi]:
+            take[gi] = min(len(passing[gi]), max(1, round(n * len(items) / total)))
+    while sum(take.values()) > n:      # the reserved slots never exceed the target
+        take[max(take, key=take.get)] -= 1
+    chosen = {(gi, i) for gi, k in take.items() for i in passing[gi][:k]}
+    entries.sort(key=lambda t: t[:3])
+    picked = [e for e in entries if (e[1], e[2]) in chosen][:n]
+    picked_ids = {(e[1], e[2]) for e in picked}
+    for e in entries:
+        if len(picked) >= n:
+            break
+        if (e[1], e[2]) not in picked_ids:
+            picked.append(e)
+            picked_ids.add((e[1], e[2]))
+    picked.sort(key=lambda t: t[:3])
+    rest = [e for e in entries if (e[1], e[2]) not in picked_ids]
+    for pos, e in enumerate(picked + rest):
+        if isinstance(e[3], dict):
+            e[3]["rank_score"] = round(1 - pos / max(1, total), 4)
+    return [e[3] for e in picked]
 
 
 def cut_from_peak(window, curve, min_s, max_s, step=ENERGY_STEP):
@@ -127,6 +182,7 @@ def cut_from_peak(window, curve, min_s, max_s, step=ENERGY_STEP):
     return {"start": round(start, 3), "end": round(end, 3),
             "predicted_score": int(round(100 * float(window.get("score_pct") or 0))),
             "source_window_id": window["id"], "kind": "nonspeech",
+            "rank_score": window.get("rank_score"),
             "video_title_for_youtube_short": None, "viral_hook_text": None,
             "video_description_for_tiktok": None, "video_description_for_instagram": None,
             "why": "Loudest or most replayed moment of a stretch without speech"}

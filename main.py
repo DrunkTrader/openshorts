@@ -2332,7 +2332,13 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None, replay
             # One global top N over both groups, by percentile within each:
             # neither starves, and the shortlist is `target` whenever there are
             # that many windows (never "up to K per group").
-            merged = silent_signals.merge_rankings(ranked, ns_ranked, target)
+            score_of = {w["id"]: w.get("score", 0) for w in scored}
+            floor_score = silent_signals.speech_min_score()
+            bar = silent_signals.energy_bar(curve)
+            merged = silent_signals.merge_rankings(
+                ranked, ns_ranked, target,
+                speech_ok=lambda w: score_of.get(w["id"], 0) >= floor_score,
+                silent_ok=lambda w: silent_signals.passes_bar(w, bar))
             ns_short = [w for w in merged if w.get("kind") == "nonspeech"]
             ns_spare = [w for w in ns_ranked if w not in ns_short]
             shortlist = [w for w in merged if w.get("kind") != "nonspeech"]
@@ -2394,6 +2400,13 @@ def get_viral_clips(transcript_result, video_duration, viewer_clips=None, replay
             kept, notes = bound_clips(raw, detail_items + ns_ranked, video_duration, min_secs, max_secs)
             for note in notes:
                 print(f"   Bounds: {note}")
+            if ns_ranked:
+                # One scale across groups: dedupe and trim compare rank_score
+                # (the merged ranking), not the speech LLM score against a
+                # code-made one. predicted_score stays for display.
+                rank_by_id = {w["id"]: w["rank_score"] for w in windows + ns_ranked if "rank_score" in w}
+                kept = [{**c, "rank_score": rank_by_id[str(c.get("source_window_id"))]}
+                        if str(c.get("source_window_id")) in rank_by_id else c for c in kept]
             snapped = []
             for c in kept:
                 s = dict(c)

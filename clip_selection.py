@@ -130,6 +130,24 @@ def score_batches(windows, batch_size):
     return out
 
 
+def clip_rank(clip):
+    """Sort key for comparing clips across groups: ``rank_score`` (0-1, from the
+    merged speech/non-speech ranking, ``silent_signals.merge_rankings``) first,
+    then the model's ``predicted_score`` to order clips of one window. A list
+    without ``rank_score`` (pure speech) compares on ``predicted_score`` alone.
+    ``predicted_score`` stays on the clip for display only."""
+    try:
+        pred = float(clip.get("predicted_score") or 0)
+    except (TypeError, ValueError, AttributeError):
+        pred = 0.0
+    try:
+        rs = clip.get("rank_score")
+        rs = float(rs) if rs is not None else pred / 100.0
+    except (TypeError, ValueError, AttributeError):
+        rs = pred / 100.0
+    return (rs, pred)
+
+
 def trim_to_best(shorts, max_clips):
     """Cut an over-long detail-pass result down to ``max_clips`` BY SCORE.
 
@@ -154,14 +172,8 @@ def trim_to_best(shorts, max_clips):
     if len(shorts) <= max_clips:
         return list(shorts)
 
-    def score(item):
-        try:
-            return float(item[1].get("predicted_score") or 0)
-        except (TypeError, ValueError, AttributeError):
-            return 0.0
-
     indexed = list(enumerate(shorts))
-    best = sorted(indexed, key=score, reverse=True)[:max_clips]
+    best = sorted(indexed, key=lambda item: clip_rank(item[1]), reverse=True)[:max_clips]
     return [item for _, item in sorted(best, key=lambda pair: pair[0])]
 
 
@@ -536,6 +548,11 @@ def bound_clips(shorts, items, video_duration, min_secs, max_secs):
             continue
         lo, hi = 0.0, float(video_duration)
         w = owner.get(str(c.get("source_window_id") or ""))
+        if w is None and items:
+            # An id the model made up: the nearest window to the clip, not the whole video.
+            mid = (a + b) / 2
+            w = min(items, key=lambda x: max(x.get("search_start", x["start"]) - mid, mid - x.get("search_end", x["end"]), 0))
+            notes.append(f"{tag}: unknown window id, held to {w['id']}")
         if w is not None:
             lo, hi = max(lo, w.get("search_start", w["start"])), min(hi, w.get("search_end", w["end"]))
         na, nb = min(max(a, lo), hi), min(max(b, lo), hi)
@@ -553,7 +570,7 @@ def bound_clips(shorts, items, video_duration, min_secs, max_secs):
 
 def dedupe_overlapping(shorts, ratio=0.25):
     """Drop clips that overlap an already-kept clip by ``ratio`` of the
-    shorter one, keeping the higher ``predicted_score`` (earlier on a tie).
+    shorter one, keeping the higher ``clip_rank`` (earlier on a tie).
 
     0.25, not 0.5: two clips sharing 25 s of 59 s (42%) both survived the old
     bar and the same punchline came out twice in one batch.
@@ -564,12 +581,6 @@ def dedupe_overlapping(shorts, ratio=0.25):
     and the user then downloads the same short twice. Survivors come back in
     transcript order, like ``trim_to_best``.
     """
-    def _score(c):
-        try:
-            return float(c.get("predicted_score") or 0)
-        except (TypeError, ValueError, AttributeError):
-            return 0.0
-
     def _span(c):
         try:
             return float(c.get("start", 0)), float(c.get("end", 0))
@@ -578,7 +589,7 @@ def dedupe_overlapping(shorts, ratio=0.25):
 
     indexed = list(enumerate(shorts))
     kept = []
-    for idx, clip in sorted(indexed, key=lambda p: (-_score(p[1]), p[0])):
+    for idx, clip in sorted(indexed, key=lambda p: (tuple(-x for x in clip_rank(p[1])), p[0])):
         s, e = _span(clip)
         clash = False
         for _, other in kept:
