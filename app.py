@@ -2705,6 +2705,9 @@ async def lifespan(app: FastAPI):
         # a single job-failure alert is easy to miss and ingest stays broken
         # until someone tops the balance up.
         asyncio.create_task(_alerts.proxy_watch_loop())
+    if not BILLING_ENABLED:
+        # Videos dropped in the import folder join the self-host library.
+        asyncio.create_task(_slot_import_folder(*_slot_dirs_for(None)[:2]))
     bot_task = None
     if not BILLING_ENABLED and os.environ.get("TELEGRAM_INTAKE_TOKEN"):
         # Self-host intake bot: polls Telegram, talks to this API over loopback.
@@ -5585,6 +5588,16 @@ SLOT_LIBRARY_MAX_ITEMS = int(os.environ.get("SLOT_LIBRARY_MAX_ITEMS", "30"))
 _slot_library_lock = asyncio.Lock()
 
 
+SLOT_LIBRARY_IMPORT_DIR = os.environ.get("SLOT_LIBRARY_IMPORT_DIR") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "split_library")
+
+
+def _slot_dirs_for(owner):
+    key = slot_library.owner_key(owner)
+    return (os.path.join(UPLOAD_DIR, "slot_library", key),
+            os.path.join(THUMBNAILS_DIR, f"slot_{key}"), f"/thumbnails/slot_{key}")
+
+
 async def _slot_library_dirs(request):
     """(video_dir, thumb_dir, thumb_url_prefix) of the caller's library.
     Videos sit under uploads/ (never served); thumbnails under the authorised
@@ -5593,12 +5606,10 @@ async def _slot_library_dirs(request):
     owner = await _owner_id(request)
     if BILLING_ENABLED and owner is None:
         raise HTTPException(status_code=401, detail="Sign in to use the clip library")
-    key = slot_library.owner_key(owner)
-    thumb_dir = os.path.join(THUMBNAILS_DIR, f"slot_{key}")
+    video_dir, thumb_dir, prefix = _slot_dirs_for(owner)
     if owner is not None:
         _write_owner_marker(thumb_dir, owner)
-    return (os.path.join(UPLOAD_DIR, "slot_library", key), thumb_dir,
-            f"/thumbnails/slot_{key}")
+    return video_dir, thumb_dir, prefix
 
 
 def _slot_item_view(item, thumb_prefix):
@@ -5608,16 +5619,110 @@ def _slot_item_view(item, thumb_prefix):
             "thumb": f"{thumb_prefix}/{item['thumb']}" if item.get("thumb") else None}
 
 
+async def _slot_store(video_dir, thumb_dir, path, ext, name):
+    """Validate a video file and move it into the library (``path`` is moved
+    only on success). The trust boundary: the extension and any client MIME
+    prove nothing, so the bytes, ffprobe and the duration decide."""
+    if not slot_library.sniff_container(path):
+        raise HTTPException(status_code=415, detail="This file is not a video.")
+    loop = asyncio.get_event_loop()
+    try:
+        w, h, duration, has_audio = await loop.run_in_executor(None, slot_split.probe_video, path)
+    except slot_split.SlotError as e:
+        raise HTTPException(status_code=415, detail=str(e))
+    if not 0 < duration <= SLOT_UPLOAD_MAX_SECONDS:
+        raise HTTPException(status_code=413, detail=f"Clips must be at most {SLOT_UPLOAD_MAX_SECONDS:.0f}s long.")
+    async with _slot_library_lock:
+        if len(slot_library.list_items(video_dir)) >= SLOT_LIBRARY_MAX_ITEMS:
+            raise HTTPException(status_code=409, detail=f"The library holds at most {SLOT_LIBRARY_MAX_ITEMS} clips. Delete one first.")
+        return await loop.run_in_executor(
+            None, slot_library.add, video_dir, thumb_dir, path, ext, name[:120],
+            {"width": w, "height": h, "duration": round(duration, 2), "has_audio": has_audio})
+
+
+def _slot_url_fetch(url, work_dir, allow_paid, route):
+    """Blocking: the first SLOT_UPLOAD_MAX_SECONDS of ``url`` through the job
+    download path (ssrf_guard, noplaylist, client list, cookies then anonymous,
+    direct -> static [-> paid]). Returns (path or None, title)."""
+    from main import download_youtube_video
+    cap = max(1.0, SLOT_UPLOAD_MAX_SECONDS - 1.0)  # a re-encoded range can run a frame long
+    pieces, title = download_youtube_video(url, work_dir, allow_paid=allow_paid,
+                                           route_out=route, ranges=[(0.0, cap)])
+    return (pieces or [None])[0], title
+
+
+async def _slot_download_url(url, work_dir):
+    """(path, title) of a link fetched server-side for the library. Free routes
+    first; the per-GB proxy only for YouTube, within budget, and only when the
+    free failure is one another IP can fix (static_failure_warrants_paid)."""
+    if DISABLE_YOUTUBE_URL:
+        raise HTTPException(status_code=403, detail="URL ingest is disabled on this deployment. Upload a file instead.")
+    await _validate_source_url(url)
+    from main import is_youtube_url
+    from yt_clients import NotASingleVideo
+    loop = asyncio.get_event_loop()
+    route = {}
+    try:
+        try:
+            return await loop.run_in_executor(None, _slot_url_fetch, url, work_dir, False, route)
+        except NotASingleVideo:
+            raise
+        except Exception as e:
+            from cloud.metering import static_failure_warrants_paid
+            if not (os.environ.get("PROXY_URL", "").strip() and is_youtube_url(url)
+                    and static_failure_warrants_paid(e)
+                    and not await _paid_proxy_budget_exceeded()):
+                raise
+            route.clear()
+            return await loop.run_in_executor(None, _slot_url_fetch, url, work_dir, True, route)
+    except NotASingleVideo as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Slot link download failed: {str(e)[:200]}")
+        raise HTTPException(status_code=400, detail="Could not download that link.")
+    finally:
+        if BILLING_ENABLED and route:
+            try:
+                from cloud import proxy_ledger as _pl
+                await _pl.record_download(f"slot_{uuid.uuid4().hex}", route, url)
+            except Exception as e:
+                print(f"⚠️ Could not record slot download route: {e}")
+
+
 @app.post("/api/slot-uploads")
-async def slot_upload(request: Request, file: UploadFile = File(...)):
+async def slot_upload(request: Request, file: Optional[UploadFile] = File(None),
+                      url: Optional[str] = Form(None), name: Optional[str] = Form(None)):
+    """Add a video to the caller's library: a ``file``, or a ``url`` the
+    server downloads (its first SLOT_UPLOAD_MAX_SECONDS). ``name`` overrides
+    the shown name."""
     video_dir, thumb_dir, prefix = await _slot_library_dirs(request)
-    name = os.path.basename((file.filename or "").replace("\\", "/")) or "upload"
-    ext = os.path.splitext(name)[1].lower()
+    url = (url or "").strip() or None
+    if (file is None) == (url is None):
+        raise HTTPException(status_code=400, detail="Send either a file or a url.")
+    label = " ".join(str(name or "").split())[:120] or None
+    os.makedirs(video_dir, exist_ok=True)
+    limit = SLOT_UPLOAD_MAX_MB * 1024 * 1024
+    if url:
+        work = os.path.join(video_dir, f".dl_{uuid.uuid4().hex}")
+        os.makedirs(work)
+        try:
+            path, title = await _slot_download_url(url, work)
+            ext = os.path.splitext(path or "")[1].lower()
+            if not path or not os.path.isfile(path) or ext not in slot_library.ALLOWED_EXTENSIONS:
+                raise HTTPException(status_code=400, detail="Could not download that link.")
+            if os.path.getsize(path) > limit:
+                raise HTTPException(status_code=413, detail=f"File too large. Max size {SLOT_UPLOAD_MAX_MB}MB")
+            item = await _slot_store(video_dir, thumb_dir, path, ext, label or str(title or "link"))
+            return _slot_item_view(item, prefix)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+    fname = os.path.basename((file.filename or "").replace("\\", "/")) or "upload"
+    ext = os.path.splitext(fname)[1].lower()
     if ext not in slot_library.ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=415, detail="Upload an MP4, MOV, WebM or MKV video.")
-    os.makedirs(video_dir, exist_ok=True)
     tmp = os.path.join(video_dir, f".tmp_{uuid.uuid4().hex}")
-    limit = SLOT_UPLOAD_MAX_MB * 1024 * 1024
     size = 0
     try:
         with open(tmp, "wb") as out:
@@ -5626,26 +5731,75 @@ async def slot_upload(request: Request, file: UploadFile = File(...)):
                 if size > limit:
                     raise HTTPException(status_code=413, detail=f"File too large. Max size {SLOT_UPLOAD_MAX_MB}MB")
                 out.write(chunk)
-        # Trust boundary: the extension and the client MIME prove nothing.
-        if not slot_library.sniff_container(tmp):
-            raise HTTPException(status_code=415, detail="This file is not a video.")
-        loop = asyncio.get_event_loop()
-        try:
-            w, h, duration, has_audio = await loop.run_in_executor(None, slot_split.probe_video, tmp)
-        except slot_split.SlotError as e:
-            raise HTTPException(status_code=415, detail=str(e))
-        if not 0 < duration <= SLOT_UPLOAD_MAX_SECONDS:
-            raise HTTPException(status_code=413, detail=f"Clips must be at most {SLOT_UPLOAD_MAX_SECONDS:.0f}s long.")
-        async with _slot_library_lock:
-            if len(slot_library.list_items(video_dir)) >= SLOT_LIBRARY_MAX_ITEMS:
-                raise HTTPException(status_code=409, detail=f"The library holds at most {SLOT_LIBRARY_MAX_ITEMS} clips. Delete one first.")
-            item = await loop.run_in_executor(
-                None, slot_library.add, video_dir, thumb_dir, tmp, ext, name[:120],
-                {"width": w, "height": h, "duration": round(duration, 2), "has_audio": has_audio})
+        item = await _slot_store(video_dir, thumb_dir, tmp, ext, label or fname)
         return _slot_item_view(item, prefix)
     finally:
         if os.path.exists(tmp):
             os.remove(tmp)
+
+
+def _slot_copy_nofollow(src, dst, limit):
+    """Copy a regular file without following a symlink at ``src``; False when
+    it is not a regular file or is over ``limit`` bytes."""
+    import stat
+    fd = os.open(src, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > limit:
+            return False
+        with os.fdopen(os.dup(fd), "rb") as f, open(dst, "wb") as out:
+            shutil.copyfileobj(f, out, 1024 * 1024)
+        return True
+    finally:
+        os.close(fd)
+
+
+async def _slot_import_folder(video_dir, thumb_dir, import_dir=None):
+    """Import the videos placed in SLOT_LIBRARY_IMPORT_DIR: regular files
+    directly in it (no subdirectories, no symlinks), named by their stem.
+    A valid file leaves the folder; an invalid one stays and is reported by
+    name only."""
+    import_dir = import_dir or SLOT_LIBRARY_IMPORT_DIR
+    imported, skipped = [], []
+    try:
+        entries = sorted(os.scandir(import_dir), key=lambda e: e.name)
+    except OSError:
+        return {"imported": imported, "skipped": skipped}
+    limit = SLOT_UPLOAD_MAX_MB * 1024 * 1024
+    for entry in entries:
+        ext = os.path.splitext(entry.name)[1].lower()
+        if entry.name.startswith(".") or ext not in slot_library.ALLOWED_EXTENSIONS:
+            continue
+        if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+            skipped.append(entry.name)
+            continue
+        os.makedirs(video_dir, exist_ok=True)
+        tmp = os.path.join(video_dir, f".tmp_{uuid.uuid4().hex}")
+        try:
+            if not await asyncio.get_event_loop().run_in_executor(
+                    None, _slot_copy_nofollow, entry.path, tmp, limit):
+                skipped.append(entry.name)
+                continue
+            await _slot_store(video_dir, thumb_dir, tmp, ext, os.path.splitext(entry.name)[0])
+            os.remove(entry.path)
+            imported.append(entry.name)
+        except (HTTPException, OSError) as e:
+            print(f"Slot import skipped {entry.name}: {getattr(e, 'detail', e)}")
+            skipped.append(entry.name)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+    return {"imported": imported, "skipped": skipped}
+
+
+@app.post("/api/slot-uploads/import")
+async def slot_uploads_import(request: Request):
+    """Import SLOT_LIBRARY_IMPORT_DIR into the caller's library. Self-host
+    only: the folder is the operator's, never shared across cloud accounts."""
+    video_dir, thumb_dir, _prefix = await _slot_library_dirs(request)
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not found")
+    return await _slot_import_folder(video_dir, thumb_dir)
 
 
 @app.get("/api/slot-uploads")

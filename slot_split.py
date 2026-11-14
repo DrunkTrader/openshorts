@@ -2,7 +2,7 @@
 
 The per-scene SPLIT layout (split_layout.py) stacks two faces of ONE source.
 This is the other thing creators ask for: the clip on one half and something
-else (a gameplay loop, b-roll) on the other, in a 50/50 or 60/40 stack.
+else (a gameplay loop, b-roll) on the other, in a 50/50, 60/40 or 40/60 stack.
 
 Pure helpers plus ffmpeg argv builders, standard library only (plus the light
 split_layout/ffmpeg_utils/layout_ranges), so it imports in CI's thin env. The
@@ -23,7 +23,8 @@ import split_layout
 from ffmpeg_utils import (METADATA_SCRUB, QUALITY_FAST, audio_encode_args,
                           video_encode_args)
 
-RATIOS = {"50/50": 0.5, "60/40": 0.6}
+# The top slot's share. 40/60 gives the bottom slot 60% (the main clip there).
+RATIOS = {"50/50": 0.5, "60/40": 0.6, "40/60": 0.4}
 AUDIO_MODES = ("source", "upload", "mix")
 KINDS = ("source", "upload")
 UPLOAD_ID_RE = re.compile(r"^[0-9a-f]{32}$")

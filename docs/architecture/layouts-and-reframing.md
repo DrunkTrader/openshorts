@@ -185,8 +185,9 @@ width, so an explicit GENERAL override on a portrait clip cannot shrink it.
 ## Slot split (clip-level)
 
 `slot_split.py` renders a top/bottom stack where each half is the clip itself
-(`source`) or an uploaded video (`upload`), 50/50 or 60/40, from the dashboard's
-"split with clip" panel in the reframe editor. It is separate from the
+(`source`) or an uploaded video (`upload`), 50/50, 60/40 or 40/60 (the top
+slot's share), from the dashboard's "split with clip" panel in the reframe
+editor and the Telegram bot's Split screen setting. It is separate from the
 per-scene SPLIT layout (two faces of one source) and from `/api/clip/reframe`.
 Not exposed to MCP or the agent API.
 
@@ -196,6 +197,17 @@ Not exposed to MCP or the agent API.
   applies). Validation is by content (container magic bytes, then ffprobe needs a
   video stream), never the extension or client MIME; size is capped by
   `SLOT_UPLOAD_MAX_MB` (500), duration by `SLOT_UPLOAD_MAX_SECONDS` (600).
+  `POST /api/slot-uploads` also takes a `url` form field instead of a file (and
+  an optional `name`): the API downloads it through `main.download_youtube_video`
+  (`_validate_source_url`, `ssrf_guard`, `noplaylist`, the `yt_clients` lists,
+  cookies then anonymous), fetching only the range `0..SLOT_UPLOAD_MAX_SECONDS-1`.
+  The first pass never uses `PROXY_URL`; a second pass may, only for YouTube,
+  within `PAID_PROXY_DAILY_MB`, and only when `static_failure_warrants_paid`
+  says another IP can fix the failure. Then the same content checks apply.
+  `POST /api/slot-uploads/import` (and API startup, self-host only) imports
+  regular files directly in `SLOT_LIBRARY_IMPORT_DIR`, opened with
+  `O_NOFOLLOW`; valid ones are moved in, invalid ones are left and reported by
+  name.
   `POST /api/clip/split` takes `{job_id, clip_index, slots}` and uses the same
   guards, per-job `_rerender_locks` and metering as the reframe endpoint. Account
   erasure removes both library directories (`_purge_local_jobs_for_user`).
@@ -209,7 +221,7 @@ Not exposed to MCP or the agent API.
 - **Audio.** `source` (default), `upload`, or `mix` (`amix`, clip length). Two
   uploads with `audio: source` play the first upload's audio.
 - **Captions.** The sidecar holds one `split` range for the whole clip with a
-  `seam` fraction (0.6 for 60/40). `generate_ass` pins each word event with
+  `seam` fraction (0.6 for 60/40, 0.4 for 40/60). `generate_ass` pins each word event with
   `{\an5\pos(...)}` at that height (explicit `PlayResX`, 9:16 only); at 0.5 it is
   the plain `{\an5}`. `layout_ranges` keeps `seam` through `normalise` and
   `remap`, so restyles and recuts keep captions on the seam. The auto-placed hook

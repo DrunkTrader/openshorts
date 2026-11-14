@@ -57,7 +57,7 @@ def test_two_uploads_with_source_audio_use_upload_audio():
     assert slot_split.upload_ids(s) == [UP, UP2]
 
 
-@pytest.mark.parametrize("ratio", ["50/50", "60/40"])
+@pytest.mark.parametrize("ratio", ["50/50", "60/40", "40/60"])
 @pytest.mark.parametrize("kinds", [("source", "upload"), ("upload", "source"),
                                    ("upload", "upload"), ("source", "source")])
 def test_graph_uses_only_supported_filters(ratio, kinds):
@@ -72,7 +72,7 @@ def test_graph_uses_only_supported_filters(ratio, kinds):
 
 
 @pytest.mark.parametrize("out_h", [1920, 1280, 854])
-@pytest.mark.parametrize("ratio", ["50/50", "60/40"])
+@pytest.mark.parametrize("ratio", ["50/50", "60/40", "40/60"])
 def test_heights_even_and_sum_to_out_h(ratio, out_h):
     top, bottom = slot_split.slot_heights(out_h, ratio)
     assert top % 2 == 0 and bottom % 2 == 0 and top + bottom == out_h
@@ -109,6 +109,7 @@ def test_seam_y_follows_ratio():
     assert slot_split.seam_fraction(1920, "50/50") == 0.5
     assert slot_split.seam_fraction(1920, "60/40") == 1152 / 1920 == 0.6
     assert slot_split.seam_range(5.0, 1920, "60/40") == [(0.0, 5.0, "split", None, 0.6)]
+    assert slot_split.seam_fraction(1920, "40/60") == 768 / 1920 == 0.4
 
 
 def test_seam_captions_are_pinned_at_the_ratio(tmp_path):
@@ -161,7 +162,7 @@ def test_upload_graph_is_unreadable_by_the_gpu_renderer():
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")
-@pytest.mark.parametrize("ratio", ["50/50", "60/40"])
+@pytest.mark.parametrize("ratio", ["50/50", "60/40", "40/60"])
 def test_ffmpeg_render_loops_a_short_upload(tmp_path, ratio):
     def make(name, seconds, size, tone):
         path = str(tmp_path / name)
