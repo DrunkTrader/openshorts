@@ -230,3 +230,33 @@ there is also `<title>.audio.m4a` and `<title>.pieces.json` (which range each
 piece holds): a resumed or drain-cancelled job reuses a piece only when the file
 exists and the sidecar has the same range, so the download step is idempotent.
 Both are removed when the job finishes.
+
+## Retention and kept clips (`.keep.json`)
+
+The cleanup task (every 5 min) deletes a job directory `JOB_RETENTION_SECONDS`
+after its last modification (self-host 24 h, Cloud 1 h), never a live job
+(`_job_is_active`), and the oldest directories while `OUTPUT_MAX_GB` is
+exceeded.
+
+Self-host only, a clip can be protected (`POST /api/jobs/{id}/clips/{index}/keep`
+with `{"until": "<ISO 8601 UTC>"}`, clamped to now + 61 days; `DELETE` drops
+it; 400 for a past time or an index outside `result.clips`, 404 for an unknown
+job and always in Cloud). The Telegram bot uses it for scheduled uploads. The
+entries live in the job's `.keep.json` (`{"<index>": "<until>"}`, never served:
+dot files are refused under `/videos`). Writing it leaves the directory's mtime
+alone, so it never restarts the retention clock.
+
+- An expired job with an active keep is **pruned**, not deleted: everything
+  goes except the file each kept clip serves (the basename of its `video_url`
+  in `/api/status`), `*_metadata.json`, `.owner`, `.cancelled` and
+  `.keep.json`. Pruning keeps the directory's mtime and is idempotent. If a
+  kept clip resolves to no file on disk, nothing is pruned (logged).
+- Once no entry is ahead (expired or deleted), the next sweep deletes the
+  directory as before. No `.keep.json` means exactly the old behaviour.
+- The size cap prunes a kept job instead of deleting it and logs when it could
+  not get under the cap without touching kept clips.
+- `/api/status` of a job with `.keep.json` reports a clip whose file is gone as
+  `{"gone": true, ...}` without `video_url` (so no `download_url`). Removed
+  clips stay in place rather than being dropped: callers such as the bot
+  address clips by position, and a dropped clip would shift every index after
+  it onto the wrong file.

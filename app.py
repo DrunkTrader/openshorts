@@ -1834,8 +1834,107 @@ def _upload_job_id(filename: str) -> str:
     return filename.split("_", 1)[0]
 
 
+# Per-clip protection (self-host, the Telegram bot's scheduled uploads):
+# ``.keep.json`` maps a clip index (its position in /api/status result.clips)
+# to an ISO UTC time. While one is ahead, an expired job dir is pruned down to
+# those clips and the files /api/status needs, instead of being deleted.
+_KEEP_FILE = ".keep.json"
+KEEP_MAX_AHEAD = timedelta(days=61)
+
+
+def _read_keeps(job_path) -> dict:
+    """``{index: until}`` from the sidecar; {} when absent or unreadable."""
+    try:
+        with open(os.path.join(job_path, _KEEP_FILE)) as f:
+            raw = json.load(f)
+        return {int(k): datetime.fromisoformat(v) for k, v in raw.items()}
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        print(f"⚠️  Unreadable {_KEEP_FILE} in {os.path.basename(job_path)}: {e}")
+        return {}
+
+
+def _write_keeps(job_path, keeps: dict) -> None:
+    """Atomic write that leaves the dir's mtime alone: setting or dropping a
+    keep must not restart the job's retention clock. An empty map stays on
+    disk so /api/status keeps reporting pruned clips as gone."""
+    st = os.stat(job_path)
+    write_json_atomic(os.path.join(job_path, _KEEP_FILE),
+                      {str(i): t.isoformat() for i, t in sorted(keeps.items())})
+    os.utime(job_path, (st.st_atime, st.st_mtime))
+
+
+def _active_keeps(job_path, now) -> set:
+    return {i for i, t in _read_keeps(job_path).items() if t.timestamp() > now}
+
+
+def _job_clips_view(job_id) -> list:
+    """result.clips as /api/status serves them (memory, else rebuilt from disk)."""
+    view = jobs.get(job_id) or _job_view_from_disk(job_id)
+    return list(((view or {}).get('result') or {}).get('clips') or [])
+
+
+def _prune_kept_job(job_id, job_path, keep_idx) -> int:
+    """Delete everything in ``job_path`` but the kept clips' served files, the
+    metadata /api/status rebuilds from, ``.owner``, ``.cancelled`` and the
+    sidecar. Returns the bytes freed. Idempotent. Refuses (frees nothing) when
+    a kept clip cannot be resolved to a file on disk: never guess at deletion."""
+    clips = _job_clips_view(job_id)
+    keep = {".owner", _KEEP_FILE, _CANCELLED_FILE}
+    keep.update(os.path.basename(p) for p in glob.glob(os.path.join(job_path, "*_metadata.json")))
+    for i in keep_idx:
+        url = clips[i].get('video_url') if i < len(clips) and isinstance(clips[i], dict) else None
+        name = os.path.basename(url) if isinstance(url, str) else ""
+        if not name or not os.path.isfile(os.path.join(job_path, name)):
+            print(f"⚠️  Kept clip {i + 1} of {job_id} has no file on disk; not pruning the job.")
+            return 0
+        keep.add(name)
+    st = os.stat(job_path)
+    freed = 0
+    for entry in os.listdir(job_path):
+        if entry in keep:
+            continue
+        p = os.path.join(job_path, entry)
+        try:
+            if os.path.isdir(p) and not os.path.islink(p):
+                size = _dir_size(p)
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                size = os.path.getsize(p)
+                os.remove(p)
+            freed += size
+        except OSError:
+            pass
+    os.utime(job_path, (st.st_atime, st.st_mtime))  # pruning is not activity
+    if freed:
+        print(f"🧹 Pruned {job_id} to {len(keep_idx)} kept clip(s) ({freed / 1024**2:.0f} MB freed)")
+    return freed
+
+
+def _mark_pruned_clips(job_id, result):
+    """A copy of ``result`` where clips whose file a prune removed say
+    ``gone: true`` and carry no ``video_url``. They stay in place, not dropped:
+    callers (the Telegram bot) address clips by position. Only for jobs with a
+    keep sidecar; any other job's result is returned as is."""
+    clips = (result or {}).get('clips') if isinstance(result, dict) else None
+    job_path = os.path.join(OUTPUT_DIR, job_id)
+    if not clips or not os.path.exists(os.path.join(job_path, _KEEP_FILE)):
+        return result
+    out = dict(result)
+    out['clips'] = []
+    for clip in clips:
+        url = clip.get('video_url') if isinstance(clip, dict) else None
+        if (isinstance(url, str) and url.startswith("/videos/")
+                and not os.path.isfile(os.path.join(job_path, os.path.basename(url)))):
+            clip = {**{k: v for k, v in clip.items() if k != 'video_url'}, 'gone': True}
+        out['clips'].append(clip)
+    return out
+
+
 def _sweep_expired_job_dirs(now):
-    """Drop job dirs older than JOB_RETENTION_SECONDS, except live jobs."""
+    """Drop job dirs older than JOB_RETENTION_SECONDS, except live jobs; a job
+    with an active keep is pruned to its kept clips instead."""
     for job_id in os.listdir(OUTPUT_DIR):
         # Not a job: the thumbnails dir backs a StaticFiles mount, so
         # deleting it would 500 every /thumbnails request until reboot.
@@ -1849,6 +1948,10 @@ def _sweep_expired_job_dirs(now):
         except OSError:
             continue
         if not expired or _job_is_active(job_id, now):
+            continue
+        keeps = _active_keeps(job_path, now)
+        if keeps:
+            _prune_kept_job(job_id, job_path, keeps)
             continue
         print(f"🧹 Purging old job: {job_id}")
         shutil.rmtree(job_path, ignore_errors=True)
@@ -1922,14 +2025,24 @@ def _enforce_output_size_cap():
                 pass
     candidates.sort()  # oldest first
     print(f"🧹 Output dir at {used / 1024**3:.1f} GB (cap {OUTPUT_MAX_GB} GB) — trimming.")
+    now = time.time()
+    skipped = []
     for _mtime, path, job_id in candidates:
         if used <= cap:
             break
+        keeps = _active_keeps(path, now)
+        if keeps:  # never a kept clip: prune around it
+            used -= _prune_kept_job(job_id, path, keeps)
+            skipped.append(job_id)
+            continue
         size = _dir_size(path)
         shutil.rmtree(path, ignore_errors=True)
         jobs.pop(job_id, None)
         used -= size
         print(f"🧹 Size cap: purged {job_id} ({size / 1024**2:.0f} MB)")
+    if used > cap and skipped:
+        print(f"⚠️  Size cap: still {used / 1024**3:.1f} GB; kept clips of "
+              f"{len(skipped)} job(s) were not deleted.")
 
 
 def _sweep_retained_sources(now=None):
@@ -3441,6 +3554,52 @@ async def cancel_job(job_id: str, request: Request):
     return {"job_id": job_id, "status": "cancelled"}
 
 
+class KeepRequest(BaseModel):
+    until: str
+
+
+async def _keep_target(job_id, index, request):
+    """Job dir and current keeps for a keep call; 404/400 like the spec says.
+    Self-host only: Cloud has its own retention and the R2 archive."""
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not found")
+    job = jobs.get(job_id) or _job_view_from_disk(job_id)
+    job_path = os.path.join(OUTPUT_DIR, job_id)
+    if job is None or not os.path.isdir(job_path):
+        raise HTTPException(status_code=404, detail="Job not found")
+    await _assert_job_owner(request, job)
+    if not 0 <= index < len(_job_clips_view(job_id)):
+        raise HTTPException(status_code=400, detail="No clip with that index in this job.")
+    return job_path, _read_keeps(job_path)
+
+
+@app.post("/api/jobs/{job_id}/clips/{index}/keep")
+async def keep_clip(job_id: str, index: int, req: KeepRequest, request: Request):
+    """Protect one clip's file from the retention sweep until ``until``
+    (clamped to now + 61 days). Replaces an earlier keep of the same clip."""
+    job_path, keeps = await _keep_target(job_id, index, request)
+    try:
+        until = datetime.fromisoformat(req.until.strip().replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="until must be an ISO 8601 time.")
+    if until.tzinfo is None:
+        until = until.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    if until <= now:
+        raise HTTPException(status_code=400, detail="until is in the past.")
+    keeps[index] = min(until.astimezone(timezone.utc), now + KEEP_MAX_AHEAD)
+    _write_keeps(job_path, keeps)
+    return {"job_id": job_id, "index": index, "until": keeps[index].isoformat()}
+
+
+@app.delete("/api/jobs/{job_id}/clips/{index}/keep")
+async def unkeep_clip(job_id: str, index: int, request: Request):
+    job_path, keeps = await _keep_target(job_id, index, request)
+    if keeps.pop(index, None) is not None:
+        _write_keeps(job_path, keeps)
+    return {"job_id": job_id, "index": index, "kept": False}
+
+
 def _job_source_label(job):
     """The link of a URL job, or the uploaded file's name."""
     url = _job_source_url(job)
@@ -4304,7 +4463,7 @@ async def get_status(job_id: str, request: Request):
         "logs": _logs_view[0],
         # When each line arrived (epoch seconds, parallel to "logs"), or None.
         "log_times": _logs_view[1],
-        "result": _with_download_urls(job.get('result')),
+        "result": _with_download_urls(_mark_pruned_clips(job_id, job.get('result'))),
         # Position in line and a rough wait while the job is still queued.
         "queue": queue_snapshot(job_id),
         # Set when only the first part of the source was clipped (quota wall
