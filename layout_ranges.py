@@ -78,7 +78,7 @@ def _band(value):
 
 def _seam(value):
     """A seam height (fraction of the frame) other than the middle, or None.
-    Only a slot split with a 60/40 ratio has one; everything else is 0.5."""
+    Only a slot split at 60/40 or 40/60 has one; everything else is 0.5."""
     try:
         v = float(value)
     except (TypeError, ValueError):

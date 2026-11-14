@@ -858,7 +858,7 @@ function App() {
             setStatus('complete');
             clearInterval(interval);
             refreshMe();
-          } else if (data.status === 'failed') {
+          } else if (data.status === 'failed' || data.status === 'cancelled') {
             setStatus('error');
             const errorMsg = data.error || (data.logs && data.logs.length > 0 ? data.logs[data.logs.length - 1] : "Process failed");
             setJobError(readableError(errorMsg));

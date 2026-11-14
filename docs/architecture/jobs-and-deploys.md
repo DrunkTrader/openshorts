@@ -160,6 +160,32 @@ parakeet text.
   dashboard shows it with a "paid plans skip the line" upsell (paid plans do
   dispatch first: `PLAN_PRIORITY`).
 
+## Cancelling a job (`POST /api/jobs/{id}/cancel`)
+
+A user cancel is final, unlike a drain-cancel (below), which keeps the manifest
+so the job resumes.
+
+- Owner checks as for the other job endpoints (`_assert_job_owner`); unknown
+  job 404, a job already completed / failed / cancelled 409.
+- Queued: the status becomes `cancelled`; `process_queue` skips it at dequeue
+  and again after it gets a slot (the slot is handed back). The reservation is
+  released and the webhook told right away, since no wrapper will run.
+- Running: `_kill_job_process` kills main.py and every process below it
+  (`ps` tree walk on POSIX, `taskkill /T` on Windows). The child is not in its
+  own process group on purpose: Ctrl-C and the drain rely on that. `run_job`
+  keeps `cancelled` whatever the exit code, so the auto-retry (which would read
+  "exit code -9" as transient) never sees a failure; `run_job_wrapper` then
+  frees the slot, releases the reservation and notifies, as for any finished
+  job, even while the server is stopping.
+- Both paths delete `.resume.json` and write `.cancelled`, so a restart neither
+  resumes the job nor recovers it as completed.
+- `GET /api/jobs/active` lists the caller's queued and processing jobs
+  (`job_id`, `status`, `position`, `stage`, `source`, `started_at`); in Cloud
+  only the caller's own.
+
+The dashboard treats `cancelled` like a failure (stops polling, shows the
+log line); it has no Cancel button. The Telegram bot has one.
+
 ## Deploys and running jobs (handover + drain)
 
 Every push to `main` redeploys the API container as a rolling update: the NEW

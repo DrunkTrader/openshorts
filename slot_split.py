@@ -2,7 +2,7 @@
 
 The per-scene SPLIT layout (split_layout.py) stacks two faces of ONE source.
 This is the other thing creators ask for: the clip on one half and something
-else (a gameplay loop, b-roll) on the other, in a 50/50 or 60/40 stack.
+else (a gameplay loop, b-roll) on the other, in a 50/50, 60/40 or 40/60 stack.
 
 Pure helpers plus ffmpeg argv builders, standard library only (plus the light
 split_layout/ffmpeg_utils/layout_ranges), so it imports in CI's thin env. The
@@ -23,7 +23,8 @@ import split_layout
 from ffmpeg_utils import (METADATA_SCRUB, QUALITY_FAST, audio_encode_args,
                           video_encode_args)
 
-RATIOS = {"50/50": 0.5, "60/40": 0.6}
+# The top slot's share. 40/60 gives the bottom slot 60% (the main clip there).
+RATIOS = {"50/50": 0.5, "60/40": 0.6, "40/60": 0.4}
 AUDIO_MODES = ("source", "upload", "mix")
 KINDS = ("source", "upload")
 UPLOAD_ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -219,6 +220,12 @@ def build_command(spec, cut_path, out_path, upload_paths, upload_dims,
     graph = build_filtergraph(spec, src_w, src_h, out_w, out_h, upload_dims,
                               face_centre)
     audio_chain, audio_map = audio_plan(spec, source_has_audio)
+    audio_args = audio_encode_args()
+    if audio_chain and "-af" in audio_args:
+        # ffmpeg refuses -af on a stream fed by -filter_complex: normalise inside the chain.
+        k = audio_args.index("-af")
+        audio_chain = f"{audio_chain[:-len('[a]')]},{audio_args[k + 1]}[a]"
+        audio_args = audio_args[:k] + audio_args[k + 2:]
     if audio_chain:
         graph = f"{graph};{audio_chain}"
     return ["ffmpeg", "-y", "-i", cut_path,
@@ -227,7 +234,7 @@ def build_command(spec, cut_path, out_path, upload_paths, upload_dims,
             "-map", "[v]", "-map", audio_map,
             # -t, not -shortest: a looped upload never ends.
             "-t", f"{duration:.3f}",
-            *video_encode_args(QUALITY_FAST), *audio_encode_args(),
+            *video_encode_args(QUALITY_FAST), *audio_args,
             *METADATA_SCRUB, "-movflags", "+faststart", out_path]
 
 

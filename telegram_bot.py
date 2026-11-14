@@ -37,13 +37,16 @@ HELP = (
     "Send a YouTube (or other video) link and I will show a settings panel; press Start "
     "to queue it, and I send the clips back here.\n"
     "You can also send a video file up to 20 MB; for bigger videos send a link.\n\n"
+    "/library - the split-screen videos, with delete buttons (imports the server folder first)\n"
+    "Send a video with the caption /save <name> to add it to the library.\n"
     "/presets - list saved presets\n"
     "/preset_delete <name> - delete a preset\n"
     "/preset_default <name> - the preset new panels start from\n"
     "/schedule <job> <clip#> <platforms> <YYYY-MM-DD HH:MM> - schedule a clip "
     "(platforms: tiktok,instagram,youtube; job is the short id from Queued)\n"
+    "/jobs - queued and running jobs, each with a 🛑 cancel button\n"
     "/scheduled - list scheduled posts\n"
-    "/cancel <id> - cancel a scheduled post\n"
+    "/cancel <id> - cancel a scheduled post (to cancel a job, use /jobs or its 🛑 button)\n"
     "/help - this text"
 )
 NO_UPLOAD = ("\n\nUpload to YouTube is off: N8N_UPLOAD_WEBHOOK_URL is not set on the server, "
@@ -60,17 +63,59 @@ OPTIONS = {
     "len": ("Length", ("30-60", "15-30", "30-90", "60-90")),
     "priv": ("YouTube privacy", ("private", "unlisted", "public")),
 }
+# Split screen (spl): the clip and an extra video from the library, stacked by
+# /api/clip/split once the job is done. "src" is {"id", "name"} of a library item.
+SPLIT_OPTIONS = {
+    "pos": ("Extra video at", ("bottom", "top")),
+    "rat": ("Ratio", ("50/50", "60/40")),        # 60 is always the main clip
+    "aud": ("Audio", ("source", "extra", "mix")),
+    "off": ("Start offset", ("0", "10", "30", "60")),  # or typed seconds
+}
 DEFAULTS = {"cap": "default", "lay": "auto", "fmt": "vertical", "hook": "pill",
-            "n": "auto", "len": "30-60", "priv": "private"}
+            "n": "auto", "len": "30-60", "priv": "private",
+            "spl": "off", "pos": "bottom", "rat": "50/50", "aud": "source", "off": "0", "src": None}
 NAME_BYTES = 32   # preset names ride in callback_data ("l:<name>", 64-byte cap)
 TITLE_CHARS = 100
+MAX_OFFSET = 36000   # slot_split.MAX_OFFSET_SECONDS
+_ID_RE = re.compile(r"^[0-9a-f]{32}$")   # a library item id
+_JOB_RE = re.compile(r"^[A-Za-z0-9-]{1,48}$")
+
+
+def parse_offset(text) -> Optional[str]:
+    """Seconds as a short string (0 <= s <= MAX_OFFSET), else None."""
+    try:
+        v = float(str(text).strip())
+    except (TypeError, ValueError):
+        return None
+    return f"{v:g}" if 0 <= v <= MAX_OFFSET else None   # also rejects NaN
 
 
 def clean_settings(s) -> dict:
     """Every key present with a value the current code offers (old presets may name
-    a style that is gone)."""
+    a style that is gone). Split on forces vertical: the split renders 9:16 only."""
     s = s if isinstance(s, dict) else {}
-    return {k: s.get(k) if s.get(k) in choices else DEFAULTS[k] for k, (_, choices) in OPTIONS.items()}
+    out = {k: s.get(k) if s.get(k) in choices else DEFAULTS[k]
+           for k, (_, choices) in {**OPTIONS, **SPLIT_OPTIONS}.items()}
+    out["off"] = parse_offset(s.get("off")) or "0"
+    src = s.get("src")
+    out["src"] = ({"id": src["id"], "name": str(src.get("name") or "video")[:64]}
+                  if isinstance(src, dict) and isinstance(src.get("id"), str)
+                  and _ID_RE.match(src["id"]) else None)
+    out["spl"] = "on" if s.get("spl") == "on" else "off"
+    if out["spl"] == "on":
+        out["fmt"] = "vertical"
+    return out
+
+
+def split_body(job_id, i, s) -> dict:
+    """The /api/clip/split body for clip ``i`` with split settings ``s``."""
+    extra = {"kind": "upload", "upload_id": s["src"]["id"], "offset_s": float(s["off"])}
+    top, bottom = (extra, {"kind": "source"}) if s["pos"] == "top" else ({"kind": "source"}, extra)
+    # The ratio is the top slot's share: 60/40 keeps the 60 on the main clip.
+    ratio = "50/50" if s["rat"] == "50/50" else ("40/60" if s["pos"] == "top" else "60/40")
+    return {"job_id": job_id, "clip_index": i,
+            "slots": {"top": top, "bottom": bottom, "ratio": ratio,
+                      "audio": {"extra": "upload"}.get(s["aud"], s["aud"]), "loop": True}}
 
 
 def form_fields(s) -> dict:
@@ -95,6 +140,13 @@ def preset_name(text: str) -> str:
 
 def _label(v) -> str:
     return {"none": "plain crop"}.get(v, str(v).replace("_", " "))
+
+
+def _unlink(path):
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 def _btn(text, data):
@@ -267,9 +319,11 @@ class IntakeBot:
             return await self.handle_callback(update["callback_query"])
         msg = update.get("message") or {}
         chat_id = (msg.get("chat") or {}).get("id")
-        if chat_id not in self.allowed:
+        user_id = (msg.get("from") or {}).get("id")
+        # Both, as for callbacks: in a listed group an unlisted member gets nothing.
+        if chat_id not in self.allowed or user_id not in self.allowed:
             self.ignored += 1
-            log.info("ignored update from unlisted chat (%d so far)", self.ignored)
+            log.info("ignored update from unlisted chat/user (%d so far)", self.ignored)
             return
         async with self.client_factory() as c:
             try:
@@ -284,17 +338,28 @@ class IntakeBot:
     async def _dispatch(self, c, chat_id, msg):
         text = msg.get("text") or ""
         cmd = parse_command(text)
-        # Any message ends a pending prompt; plain text (not a command or a link) answers it.
+        doc = msg.get("video") or msg.get("document")
+        if doc and not (msg.get("video") or str(doc.get("mime_type", "")).startswith("video/")):
+            doc = None
+        # Any message ends a pending prompt; plain text (not a command or a link)
+        # answers it, a video answers "send a video", a link "send a link".
         waiting = self.data["awaiting"].pop(str(chat_id), None)
         if waiting:
             self._save()
-            if text and not cmd and not extract_url(text):
+            kind = waiting.get("kind")
+            if kind == "split_video" and doc:
+                return await self._split_video(c, chat_id, waiting, doc)
+            if kind == "split_link" and text and not cmd and extract_url(text):
+                return await self._split_link(c, chat_id, waiting, extract_url(text))
+            if kind not in ("split_video", "split_link") and text and not cmd and not extract_url(text):
                 return await self._answer_prompt(c, chat_id, waiting, text)
-        doc = msg.get("video") or msg.get("document")
-        if doc and (msg.get("video") or str(doc.get("mime_type", "")).startswith("video/")):
+        if doc:
             if int(doc.get("file_size") or 0) > FILE_LIMIT:
                 return await self._say(c, chat_id, "That file is over 20 MB, which is the most a bot can "
                                                    "download. Send a link instead.")
+            caption = parse_command(msg.get("caption") or "")
+            if caption and caption[0] == "/save":
+                return await self._save_video(c, chat_id, doc, caption[1])
             return await self._open_panel(c, chat_id, {"file": {
                 k: doc.get(k) for k in ("file_id", "file_name", "file_size")}})
         if cmd:
@@ -302,7 +367,8 @@ class IntakeBot:
             fn = {"/schedule": self._schedule, "/scheduled": self._scheduled,
                   "/cancel": self._cancel, "/presets": self._presets,
                   "/preset_delete": self._preset_delete,
-                  "/preset_default": self._preset_default}.get(name)
+                  "/preset_default": self._preset_default,
+                  "/library": self._library, "/jobs": self._jobs}.get(name)
             if fn:
                 return await fn(c, chat_id, rest)
             return await self._say(c, chat_id, self._help())
@@ -326,27 +392,88 @@ class IntakeBot:
     def panel_text(panel) -> str:
         src = panel["src"]
         what = src.get("url") or (src.get("file") or {}).get("file_name") or "uploaded video"
-        lines = [f"{label}: {_label(panel['s'][k])}" for k, (label, _) in OPTIONS.items()]
-        return f"New job: {what}\n\n" + "\n".join(lines) + "\n\nPick options, then press Start."
+        s = panel["s"]
+        lines = [f"{label}: {_label(s[k])}" for k, (label, _) in OPTIONS.items()]
+        if s["spl"] == "on":
+            lines[list(OPTIONS).index("fmt")] += " (split screen needs it)"
+        lines.append(IntakeBot.split_line(s))
+        note = f"\n\n⚠️ {panel['note']}" if panel.get("note") else ""
+        return f"New job: {what}\n\n" + "\n".join(lines) + note + "\n\nPick options, then press Start."
+
+    @staticmethod
+    def split_line(s) -> str:
+        if s["spl"] != "on":
+            return "Split screen: off"
+        name = s["src"]["name"] if s["src"] else "not picked yet"
+        return (f"Split screen: on, extra video {name} at the {s['pos']}, {s['rat']} "
+                f"(the bigger part is the clip), audio {s['aud']}, from {s['off']} s")
 
     @staticmethod
     def panel_keyboard(s):
         opts = [_btn(f"{label}: {_label(s[k])}", f"m:{k}") for k, (label, _) in OPTIONS.items()]
+        opts.append(_btn(f"Split screen: {s['spl']}", "m:spl"))
         return _rows(opts, 2) + [[_btn("▶️ Start", "go"), _btn("💾 Save as preset", "sv")],
                                  [_btn("📂 Load preset", "ld"), _btn("✖️ Cancel", "x")]]
 
     @staticmethod
     def option_keyboard(s, key):
+        opts = {**OPTIONS, **SPLIT_OPTIONS}
         choices = [_btn(("✓ " if v == s[key] else "") + _label(v), f"s:{key}:{v}")
-                   for v in OPTIONS[key][1]]
-        return _rows(choices, 3) + [[_btn("« Back", "m:")]]
+                   for v in opts[key][1]]
+        if key == "off":
+            choices.append(_btn("⌨️ Type seconds", "sw:o"))
+        return _rows(choices, 3) + [[_btn("« Back", "m:spl" if key in SPLIT_OPTIONS else "m:")]]
+
+    @staticmethod
+    def split_keyboard(s):
+        on = s["spl"] == "on"
+        rows = [[_btn(("✓ " if not on else "") + "Off", "s:spl:off"),
+                 _btn(("✓ " if on else "") + "On (vertical only)", "s:spl:on")],
+                [_btn(f"Extra video: {s['src']['name'] if s['src'] else 'pick one'}", "m:src")]]
+        opts = [_btn(f"{label}: {s[k]}", f"m:{k}") for k, (label, _) in SPLIT_OPTIONS.items()]
+        return rows + _rows(opts, 2) + [[_btn("« Back", "m:")]]
+
+    @staticmethod
+    def source_keyboard():
+        return [[_btn("📚 Library", "sl")], [_btn("📤 Send a video", "sw:v")],
+                [_btn("🔗 Send a link", "sw:u")], [_btn("« Back", "m:spl")]]
+
+    @staticmethod
+    def pick_keyboard(items):
+        return [[_btn(str(i.get("name") or "video")[:40], f"sp:{i['id']}")] for i in items
+                if _ID_RE.match(str(i.get("id")))] + [[_btn("« Back", "m:src")]]
+
+    @staticmethod
+    def library_keyboard(items):
+        return [[_btn(f"🗑 {str(i.get('name') or 'video')[:40]}", f"lx:{i['id']}")] for i in items
+                if _ID_RE.match(str(i.get("id")))]
 
     def presets_keyboard(self, chat_id):
         names = sorted(self._presets_of(chat_id))
         return _rows([_btn(n, f"l:{n}") for n in names], 2) + [[_btn("« Back", "m:")]]
 
+    async def _library_items(self, c):
+        """(items, None) from the API, or (None, reason)."""
+        status, body = await self._api(c, "GET", "/api/slot-uploads")
+        if status != 200:
+            return None, "OpenShorts is not reachable" if status == 0 else self._detail(body)
+        return [i for i in body.get("items") or [] if isinstance(i, dict)], None
+
+    async def _check_split_src(self, c, panel):
+        """A preset may name a library video deleted since: split off for this run."""
+        s = panel["s"]
+        panel.pop("note", None)
+        if s["spl"] != "on" or not s["src"]:
+            return
+        items, _err = await self._library_items(c)
+        if items is not None and s["src"]["id"] not in {i.get("id") for i in items}:
+            s["spl"] = "off"
+            panel["note"] = (f"The split-screen video {s['src']['name']} is no longer in the "
+                             "library, so split screen is off for this run.")
+
     async def _open_panel(self, c, chat_id, src):
         panel = {"src": src, "s": self._start_settings(chat_id)}
+        await self._check_split_src(c, panel)
         mid = await self._say(c, chat_id, self.panel_text(panel), self.panel_keyboard(panel["s"]))
         if mid is None:
             return
@@ -356,8 +483,8 @@ class IntakeBot:
             del panels[old]
         self._save()
 
-    async def _redraw(self, c, chat_id, mid, panel):
-        await self._edit(c, chat_id, mid, self.panel_text(panel), self.panel_keyboard(panel["s"]))
+    async def _redraw(self, c, chat_id, mid, panel, markup=None):
+        await self._edit(c, chat_id, mid, self.panel_text(panel), markup or self.panel_keyboard(panel["s"]))
 
     async def _keys(self, c, chat_id, mid, markup):
         await self._tg(c, "editMessageReplyMarkup", json={
@@ -391,18 +518,66 @@ class IntakeBot:
             return await self._clip_action(c, chat_id, head, arg)
         if head == "ow":
             return await self._confirm_overwrite(c, chat_id, mid, arg == "y")
+        if head == "lx":
+            return await self._library_delete(c, chat_id, mid, arg)
+        if head in ("cj", "cy", "cn"):
+            return await self._job_cancel(c, chat_id, mid, head, arg)
         panel = self._panels(chat_id).get(str(mid))
         if panel is None:
             return "This panel has expired. Send the link again."
+        s = panel["s"]
         if head == "m":
-            await self._keys(c, chat_id, mid, self.option_keyboard(panel["s"], arg)
-                             if arg in OPTIONS else self.panel_keyboard(panel["s"]))
+            if arg in OPTIONS or arg in SPLIT_OPTIONS:
+                kb = self.option_keyboard(s, arg)
+            else:
+                kb = {"spl": lambda: self.split_keyboard(s),
+                      "src": self.source_keyboard}.get(arg, lambda: self.panel_keyboard(s))()
+            await self._keys(c, chat_id, mid, kb)
         elif head == "s":
             key, _, val = arg.partition(":")
-            if key in OPTIONS and val in OPTIONS[key][1]:
-                panel["s"][key] = val
+            if key == "spl" and val in ("off", "on"):
+                s["spl"] = val
+                if val == "on":
+                    s["fmt"] = "vertical"
+                panel.pop("note", None)
+            elif key == "fmt" and s["spl"] == "on" and val != "vertical":
+                return "Split screen needs vertical. Turn split screen off first."
+            elif key in OPTIONS and val in OPTIONS[key][1] or key in SPLIT_OPTIONS and val in SPLIT_OPTIONS[key][1]:
+                s[key] = val
+            else:
+                return None
+            self._save()
+            await self._redraw(c, chat_id, mid, panel,
+                               self.split_keyboard(s) if key == "spl" or key in SPLIT_OPTIONS else None)
+        elif head == "sl":
+            items, err = await self._library_items(c)
+            if items is None:
+                return f"Could not read the library: {err}"
+            if not items:
+                return "The library is empty. Use Send a video or Send a link."
+            await self._keys(c, chat_id, mid, self.pick_keyboard(items))
+        elif head == "sp":
+            items, err = await self._library_items(c)
+            item = next((i for i in items or [] if i.get("id") == arg), None)
+            if item is None:
+                return f"Could not read the library: {err}" if err else "That video is gone from the library."
+            s["src"] = {"id": arg, "name": str(item.get("name") or "video")[:64]}
+            self._save()
+            await self._redraw(c, chat_id, mid, panel, self.split_keyboard(s))
+            return f"Picked {s['src']['name']}."
+        elif head == "sw":
+            kind, prompt = {
+                "v": ("split_video", "Send the extra video now, as a video or a file. A bot can download "
+                                     "at most 20 MB; for a bigger one use Send a link. It is saved in "
+                                     "your library (see /library)."),
+                "u": ("split_link", "Send the link of the extra video. The server downloads the start "
+                                    "of it into your library (see /library)."),
+                "o": ("split_offset", "Send the start offset in the extra video, in seconds (0 or more)."),
+            }.get(arg, (None, None))
+            if kind:
+                self.data["awaiting"][str(chat_id)] = {"kind": kind, "panel": str(mid)}
                 self._save()
-                await self._redraw(c, chat_id, mid, panel)
+                await self._say(c, chat_id, prompt)
         elif head == "ld":
             if not self._presets_of(chat_id):
                 return "No presets yet. Use Save as preset first."
@@ -412,6 +587,7 @@ class IntakeBot:
             if saved is None:
                 return "That preset is gone."
             panel["s"] = clean_settings(saved)
+            await self._check_split_src(c, panel)
             self._save()
             await self._redraw(c, chat_id, mid, panel)
             return f"Loaded {arg}."
@@ -425,6 +601,8 @@ class IntakeBot:
             self._save()
             await self._edit(c, chat_id, mid, "Cancelled.")
         elif head == "go":
+            if s["spl"] == "on" and not s["src"]:
+                return "Pick the extra video for the split screen first, or turn split screen off."
             self._panels(chat_id).pop(str(mid), None)
             self._save()
             await self._edit(c, chat_id, mid, self.panel_text(panel).rsplit("\n\n", 1)[0]
@@ -447,6 +625,15 @@ class IntakeBot:
         panel = self._panels(chat_id).get(waiting.get("panel") or "")
         if panel is None:
             return await self._say(c, chat_id, "That panel is gone; nothing saved.")
+        if waiting.get("kind") == "split_offset":
+            off = parse_offset(text)
+            if off is None:
+                return await self._say(c, chat_id, "That is not a number of seconds (0 or more). "
+                                                   "Press Type seconds again.")
+            panel["s"]["off"] = off
+            self._save()
+            await self._redraw(c, chat_id, int(waiting["panel"]), panel, self.split_keyboard(panel["s"]))
+            return await self._say(c, chat_id, f"Start offset set to {off} s.")
         name = preset_name(text)
         if not name:
             return await self._say(c, chat_id, "That name is empty once cleaned. Press Save as preset again.")
@@ -498,12 +685,14 @@ class IntakeBot:
         await self._say(c, chat_id, f"New panels start from {name}.")
 
     # --- intake ---------------------------------------------------------
-    async def _from_file(self, c, chat_id, doc, fields, settings):
+    async def _tg_download(self, c, doc):
+        """(temp path, None) of a Telegram file (the caller deletes it), or (None, reason)."""
         info = await self._tg(c, "getFile", json={"file_id": doc.get("file_id")})
         path = (info or {}).get("file_path")
         if not path:
-            return await self._say(c, chat_id, "Could not fetch that file from Telegram. Send a link instead.")
+            return None, "Could not fetch that file from Telegram. Send a link instead."
         fd, tmp = tempfile.mkstemp(suffix=os.path.splitext(path)[1] or ".mp4")
+        err = "Could not download that file. Send a link instead."
         try:
             size = 0
             with os.fdopen(fd, "wb") as out:
@@ -512,21 +701,126 @@ class IntakeBot:
                     async for chunk in r.aiter_bytes():
                         size += len(chunk)
                         if size > FILE_LIMIT:
-                            return await self._say(c, chat_id, "That file is over 20 MB. Send a link instead.")
+                            err = "That file is over 20 MB. Send a link instead."
+                            raise ValueError("over the Bot API download limit")
                         out.write(chunk)
+            return tmp, None
+        except Exception as e:
+            log.warning("file intake failed: %s", self._safe(e))
+            _unlink(tmp)
+            return None, err
+
+    async def _from_file(self, c, chat_id, doc, fields, settings):
+        tmp, err = await self._tg_download(c, doc)
+        if tmp is None:
+            return await self._say(c, chat_id, err)
+        try:
             with open(tmp, "rb") as f:
                 status, body = await self._api(
                     c, "POST", "/api/process", data={"acknowledged": "true", **fields},
                     files={"file": (doc.get("file_name") or "video.mp4", f, "video/mp4")})
-        except Exception as e:
-            log.warning("file intake failed: %s", self._safe(e))
-            return await self._say(c, chat_id, "Could not download that file. Send a link instead.")
         finally:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
+            _unlink(tmp)
         await self._queued(c, chat_id, status, body, settings)
+
+    # --- split-screen library -----------------------------------------
+    async def _library_add(self, c, doc, name):
+        """(library item, None) for a Telegram video added through the API, or (None, reason)."""
+        tmp, err = await self._tg_download(c, doc)
+        if tmp is None:
+            return None, err
+        ext = os.path.splitext(doc.get("file_name") or tmp)[1].lower() or ".mp4"
+        try:
+            with open(tmp, "rb") as f:
+                status, body = await self._api(
+                    c, "POST", "/api/slot-uploads", data={"name": name}, timeout=600,
+                    files={"file": (f"telegram{ext}", f, "video/mp4")})
+        finally:
+            _unlink(tmp)
+        if status == 200 and isinstance(body.get("id"), str):
+            return body, None
+        return None, "OpenShorts is not reachable" if status == 0 else self._detail(body)
+
+    async def _save_video(self, c, chat_id, doc, rest):
+        name = preset_name(rest)
+        if not name:
+            return await self._say(c, chat_id, "Add a name: send the video with the caption /save <name>.")
+        item, err = await self._library_add(c, doc, name)
+        await self._say(c, chat_id, f"Saved {item['name']} in the library." if item
+                        else f"Could not save it: {err}")
+
+    def _waiting_panel(self, chat_id, waiting):
+        return self._panels(chat_id).get(waiting.get("panel") or "")
+
+    async def _split_video(self, c, chat_id, waiting, doc):
+        if self._waiting_panel(chat_id, waiting) is None:
+            return await self._say(c, chat_id, "That panel is gone. Send the link again.")
+        if int(doc.get("file_size") or 0) > FILE_LIMIT:
+            return await self._say(c, chat_id, "That file is over 20 MB, the most a bot can download. "
+                                               "Use Send a link instead.")
+        stem = os.path.splitext(doc.get("file_name") or "")[0]
+        item, err = await self._library_add(c, doc, preset_name(stem) or "telegram video")
+        if item is None:
+            return await self._say(c, chat_id, f"Could not use that video: {err}")
+        await self._use_src(c, chat_id, waiting["panel"], item)
+
+    async def _split_link(self, c, chat_id, waiting, url):
+        if self._waiting_panel(chat_id, waiting) is None:
+            return await self._say(c, chat_id, "That panel is gone. Send the link again.")
+        await self._say(c, chat_id, "Downloading the extra video on the server...")
+        self._spawn(self._split_link_task(chat_id, waiting["panel"], url))
+
+    async def _split_link_task(self, chat_id, mid, url):
+        # The bot never fetches the link: the API downloads it under its own guards.
+        async with self.client_factory() as c:
+            status, body = await self._api(c, "POST", "/api/slot-uploads", data={"url": url},
+                                           timeout=1800)
+            if status != 200 or not isinstance(body.get("id"), str):
+                reason = "OpenShorts is not reachable" if status == 0 else self._detail(body)
+                return await self._say(c, chat_id, f"Could not use that link: {reason}")
+            await self._use_src(c, chat_id, mid, body)
+
+    async def _use_src(self, c, chat_id, mid, item):
+        name = str(item.get("name") or "video")[:64]
+        panel = self._panels(chat_id).get(str(mid))
+        if panel is None:
+            return await self._say(c, chat_id, f"Saved {name} in the library, but that panel is gone.")
+        panel["s"]["src"] = {"id": item["id"], "name": name}
+        self._save()
+        await self._redraw(c, chat_id, int(mid), panel, self.split_keyboard(panel["s"]))
+        await self._say(c, chat_id, f"Extra video ready: {name} (saved in /library).")
+
+    async def _library_view(self, c):
+        items, err = await self._library_items(c)
+        if items is None:
+            return f"Could not read the library: {err}", None
+        if not items:
+            return ("The library is empty. Send a video with the caption /save <name>, or put "
+                    "videos in the server's import folder."), None
+        lines = [f"{n + 1}. {i.get('name') or 'video'} ({float(i.get('duration') or 0):.0f} s)"
+                 for n, i in enumerate(items)]
+        return "Library (tap 🗑 to delete):\n" + "\n".join(lines), self.library_keyboard(items)
+
+    async def _library(self, c, chat_id, rest):
+        status, body = await self._api(c, "POST", "/api/slot-uploads/import", timeout=600)
+        note = ""
+        if status == 200:
+            if body.get("imported"):
+                note += "Imported from the folder: " + ", ".join(map(str, body["imported"])) + "\n"
+            if body.get("skipped"):
+                note += "Left in the folder (not a usable video): " + ", ".join(map(str, body["skipped"])) + "\n"
+        text, markup = await self._library_view(c)
+        await self._say(c, chat_id, (note + "\n" if note else "") + text, markup)
+
+    async def _library_delete(self, c, chat_id, mid, item_id):
+        if not _ID_RE.match(item_id):
+            return None
+        status, body = await self._api(c, "DELETE", f"/api/slot-uploads/{item_id}")
+        text, markup = await self._library_view(c)
+        await self._edit(c, chat_id, mid, text, markup)
+        if status == 200:
+            return "Deleted."
+        return "Already gone." if status == 404 else f"Could not delete: {self._detail(body)}"
 
     async def _queued(self, c, chat_id, status, body, settings):
         job_id = body.get("job_id") if isinstance(body, dict) else None
@@ -535,7 +829,7 @@ class IntakeBot:
             return await self._say(c, chat_id, f"Could not queue it: {reason}")
         self.data["job_settings"][job_id] = dict(settings)
         self._remember(chat_id, job_id)
-        mid = await self._say(c, chat_id, f"Queued job {job_id[:8]}")
+        mid = await self._say(c, chat_id, f"Queued job {job_id[:8]}", self.cancel_keyboard(job_id))
         self._spawn(self.track(chat_id, job_id, mid))
 
     # --- progress and delivery -----------------------------------------
@@ -556,14 +850,21 @@ class IntakeBot:
                     continue
                 if st != last and st in ("queued", "processing"):
                     last, interval = st, 15.0
-                    msg_id = await self._edit(c, chat_id, msg_id, f"Job {short}: {st}")
+                    msg_id = await self._edit(c, chat_id, msg_id, f"Job {short}: {st}",
+                                              self.cancel_keyboard(job_id))
                 else:
                     interval = min(60.0, interval * 1.5)
+                if st == "cancelled":
+                    return await self._edit(c, chat_id, msg_id, f"Job {short}: cancelled")
                 if st == "completed":
                     clips = (body.get("result") or {}).get("clips") or []
                     await self._edit(c, chat_id, msg_id, f"Job {short}: done, {len(clips)} clips")
+                    s = clean_settings(self.data["job_settings"].get(job_id))
                     for i, clip in enumerate(clips):
-                        await self._deliver(c, chat_id, i, clip, job_id)
+                        note = None
+                        if s["spl"] == "on" and s["src"]:
+                            clip, note = await self._apply_split(c, job_id, i, clip, s)
+                        await self._deliver(c, chat_id, i, clip, job_id, note)
                     return
                 if st == "failed":
                     return await self._edit(c, chat_id, msg_id, self._failure(short, body))
@@ -588,9 +889,27 @@ class IntakeBot:
                 return self.public_url + rel
         return None
 
-    async def _deliver(self, c, chat_id, i, clip, job_id=None):
+    async def _apply_split(self, c, job_id, i, clip, s):
+        """(clip to deliver, note): the split clip as /api/status now lists it,
+        or the plain one with a short note (4xx detail only: a 500 may carry paths)."""
+        status, body = await self._api(c, "POST", "/api/clip/split", json=split_body(job_id, i, s),
+                                       timeout=1800)
+        new = body.get("new_video_url") if status == 200 else None
+        if isinstance(new, str) and new.startswith("/videos/"):
+            st, sb = await self._api(c, "GET", f"/api/status/{job_id}")
+            fresh = ((sb.get("result") or {}).get("clips") or []) if st == 200 else []
+            if i < len(fresh) and isinstance(fresh[i], dict) and fresh[i].get("video_url") == new:
+                return fresh[i], None   # carries the signed download_url
+            return {**clip, "video_url": new, "download_url": None}, None
+        reason = (self._detail(body) if 400 <= status < 500 else
+                  "OpenShorts is not reachable" if status == 0 else "the render failed")
+        return clip, f"Split screen failed ({self._safe(reason)[:150]}), so this is the plain clip."
+
+    async def _deliver(self, c, chat_id, i, clip, job_id=None, note=None):
         title = clip.get("video_title_for_youtube_short") or f"Clip {i + 1}"
         rec = {"chat": chat_id, "i": i, "title": title[:TITLE_CHARS], "link": None, "state": ""}
+        if note:
+            rec["note"] = note
         markup = self.clip_keyboard(job_id, i, rec) if job_id else None
         mid = None
         if self.send_files:
@@ -599,7 +918,8 @@ class IntakeBot:
         if mid is None:
             rec["link"], rec["kind"] = self._link(clip), "text"
             body = self.clip_text(rec) if rec["link"] else (
-                f"{i + 1}. {title}\n(could not send the file; it is in the dashboard)")
+                f"{i + 1}. {title}\n(could not send the file; it is in the dashboard)"
+                + (f"\n{note}" if note else ""))
             mid = await self._say(c, chat_id, body, markup)
         if job_id and mid is not None:
             rec["msg"] = mid
@@ -646,6 +966,8 @@ class IntakeBot:
     @staticmethod
     def clip_text(rec) -> str:
         out = f"{rec['i'] + 1}. {rec['title']}"
+        if rec.get("note"):
+            out += f"\n{rec['note']}"
         if rec.get("link"):
             out += f"\n{rec['link']}"
         st = rec.get("state")
@@ -755,6 +1077,71 @@ class IntakeBot:
                 rec.update(state="failed", error=self._safe(result.get("error") or "unknown error")[:200])
             self._save()
             await self._show_clip(c, key, rec)
+
+    # --- cancelling jobs ------------------------------------------------
+    # callback_data "cj|cy|cn:<where>:<job id>": ask, yes, no. <where> is "s" for
+    # the job's status message, "l" for the /jobs list (redrawn after).
+    @staticmethod
+    def cancel_keyboard(job_id, where="s"):
+        return [[_btn("🛑 Cancel job", f"cj:{where}:{job_id}")]]
+
+    @staticmethod
+    def confirm_keyboard(job_id, where):
+        return [[_btn("Yes, cancel", f"cy:{where}:{job_id}"), _btn("No", f"cn:{where}:{job_id}")]]
+
+    async def _jobs_view(self, c):
+        status, body = await self._api(c, "GET", "/api/jobs/active")
+        if status != 200:
+            reason = "OpenShorts is not reachable" if status == 0 else self._detail(body)
+            return f"Could not list jobs: {reason}", None
+        rows = [j for j in body.get("jobs") or [] if isinstance(j, dict)
+                and _JOB_RE.match(str(j.get("job_id")))]
+        if not rows:
+            return "No jobs queued or running.", None
+        lines = []
+        for n, j in enumerate(rows):
+            jid, st = j["job_id"], j.get("status")
+            if st == "queued":
+                what = f"queued, #{j['position']} in line" if j.get("position") else "queued"
+            else:
+                stage = str(j.get("stage") or "").strip()
+                # Self-host logs are raw: a line with a path is not shown (as in _failure).
+                what = f"processing: {stage[:120]}" if stage and "/" not in stage and "\\" not in stage \
+                    else "processing"
+            src = f" {str(j.get('source'))[:80]}" if j.get("source") else ""
+            lines.append(f"{n + 1}. {jid[:8]} {what}{src}")
+        markup = [[_btn(f"🛑 Cancel {j['job_id'][:8]}", f"cj:l:{j['job_id']}")] for j in rows]
+        return "Active jobs:\n" + "\n".join(lines), markup
+
+    async def _jobs(self, c, chat_id, rest):
+        text, markup = await self._jobs_view(c)
+        await self._say(c, chat_id, text, markup)
+
+    async def _job_cancel(self, c, chat_id, mid, head, arg):
+        where, _, job_id = arg.partition(":")
+        if where not in ("s", "l") or not _JOB_RE.match(job_id):
+            return None
+        if head == "cj":
+            await self._keys(c, chat_id, mid, self.confirm_keyboard(job_id, where))
+            return "Cancel this job?"
+        if head == "cn":
+            if where == "l":
+                text, markup = await self._jobs_view(c)
+                await self._edit(c, chat_id, mid, text, markup)
+            else:
+                await self._keys(c, chat_id, mid, self.cancel_keyboard(job_id))
+            return "Kept."
+        status, body = await self._api(c, "POST", f"/api/jobs/{job_id}/cancel")
+        if status == 200:
+            if where == "l":
+                text, markup = await self._jobs_view(c)
+                await self._edit(c, chat_id, mid, text, markup)
+            else:
+                await self._edit(c, chat_id, mid, f"Job {job_id[:8]}: cancelled")
+            return "Cancelled."
+        if where == "s":
+            await self._keys(c, chat_id, mid, [])
+        return "OpenShorts is not reachable." if status == 0 else self._detail(body)[:150]
 
     # --- scheduling -----------------------------------------------------
     def _need_profile(self):

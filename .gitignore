@@ -52,3 +52,7 @@ CLAUDE.local.md
 
 # Rust build output
 osrender/target/
+
+# Split-screen library import folder (only its README is versioned)
+split_library/*
+!split_library/README.md

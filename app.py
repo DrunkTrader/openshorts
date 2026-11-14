@@ -1331,8 +1331,9 @@ def _recover_jobs_from_disk():
                 with open(owner_path) as f:
                     raw = f.read().strip()
                 owner = int(raw) if raw.isdigit() else (raw or None)
+            cancelled = os.path.exists(os.path.join(job_path, _CANCELLED_FILE))
             jobs[job_id] = {
-                'status': 'completed',
+                'status': 'cancelled' if cancelled else 'completed',
                 'logs': _TimedLog(["♻️ Job recovered from disk after server restart."]),
                 'output_dir': job_path,
                 'user_id': owner,
@@ -2022,6 +2023,11 @@ async def process_queue():
             # Wait for a job (priority, seq, job_id) — lowest priority first.
             _priority, _seq, job_id = await job_queue.get()
 
+            if _is_cancelled(job_id):
+                # Cancelled while waiting in line: it never starts.
+                job_queue.task_done()
+                continue
+
             if _draining:
                 # Leave it on disk for the next instance (manifest, no heartbeat).
                 print(f"⏸️ Draining — leaving {job_id} for the next instance.")
@@ -2031,7 +2037,7 @@ async def process_queue():
             # Acquire semaphore slot (waits if max jobs are running)
             _admitting.add(job_id)
             await concurrency_semaphore.acquire()
-            if _draining:
+            if _draining or _is_cancelled(job_id):
                 _admitting.discard(job_id)
                 concurrency_semaphore.release()
                 job_queue.task_done()
@@ -2040,7 +2046,7 @@ async def process_queue():
             # The old container may still be draining its jobs on this GPU.
             await _wait_for_shared_gpu()
             _admitting.discard(job_id)
-            if _draining:
+            if _draining or _is_cancelled(job_id):
                 concurrency_semaphore.release()
                 job_queue.task_done()
                 print(f"⏸️ Draining — leaving {job_id} for the next instance.")
@@ -2126,7 +2132,7 @@ async def run_job_wrapper(job_id):
     except Exception as e:
          print(f"❌ Job wrapper error {job_id}: {e}")
     finally:
-        if interrupted or (_stopping and job and job.get('status') != 'completed'):
+        if interrupted or (_stopping and job and job.get('status') not in ('completed', 'cancelled')):
             _running_jobs.discard(job_id)
             concurrency_semaphore.release()
             job_queue.task_done()
@@ -2400,8 +2406,8 @@ async def _record_job_alert(job_id):
     if not BILLING_ENABLED:
         return
     job = jobs.get(job_id) or {}
-    if not job.get('user_id'):
-        return  # only track managed jobs
+    if not job.get('user_id') or job.get('status') == 'cancelled':
+        return  # only track managed jobs; a user's cancel is not a failure
     ok = job.get('status') == 'completed'
     err = "" if ok else _job_error_text(job.get('logs', []))
     try:
@@ -2705,6 +2711,9 @@ async def lifespan(app: FastAPI):
         # a single job-failure alert is easy to miss and ingest stays broken
         # until someone tops the balance up.
         asyncio.create_task(_alerts.proxy_watch_loop())
+    if not BILLING_ENABLED:
+        # Videos dropped in the import folder join the self-host library.
+        asyncio.create_task(_slot_import_folder(*_slot_dirs_for(None)[:2]))
     bot_task = None
     if not BILLING_ENABLED and os.environ.get("TELEGRAM_INTAKE_TOKEN"):
         # Self-host intake bot: polls Telegram, talks to this API over loopback.
@@ -3200,8 +3209,11 @@ async def run_job(job_id, job_data):
         # The daily paid-proxy budget ran out while this job was queued.
         env.pop("PROXY_URL", None)
     output_dir = job_data['output_dir']
+    if job_data.get('cancel_requested'):
+        return  # cancelled between the dispatch and here: never started
     
     jobs[job_id]['status'] = 'processing'
+    jobs[job_id]['started_at'] = time.time()
     jobs[job_id]['logs'].append("Job started by worker.")
     print(f"🎬 [run_job] Executing command for {job_id}: {' '.join(cmd)}")
     
@@ -3214,6 +3226,7 @@ async def run_job(job_id, job_data):
             cwd=os.getcwd(),
             preexec_fn=_lower_priority if os.name != "nt" else None,
         )
+        _job_processes[job_id] = process
         
         # We need to capture logs in a thread because Popen isn't async
         t_log = threading.Thread(target=enqueue_output, args=(process.stdout, job_id))
@@ -3223,7 +3236,12 @@ async def run_job(job_id, job_data):
         # Async wait for process with incremental updates
         start_wait = time.time()
         last_heartbeat = time.time()
+        killed = False
         while process.poll() is None:
+            if job_data.get('cancel_requested') and not killed:
+                # Cancelled before the endpoint could see the process.
+                killed = True
+                await asyncio.get_event_loop().run_in_executor(None, _kill_job_process, process)
             try:
                 await asyncio.sleep(2)
             except asyncio.CancelledError:
@@ -3280,7 +3298,10 @@ async def run_job(job_id, job_data):
                 pass
 
         returncode = process.returncode
-        
+
+        if job_data.get('cancel_requested'):
+            job_data['status'] = 'cancelled'
+            return
         if returncode == 0:
             jobs[job_id]['status'] = 'completed'
             jobs[job_id]['logs'].append("Process finished successfully.")
@@ -3328,10 +3349,129 @@ async def run_job(job_id, job_data):
             jobs[job_id]['logs'].append(_scrub_secrets(f"Process failed with exit code {returncode}"))
             
     except Exception as e:
+        if job_data.get('cancel_requested'):
+            job_data['status'] = 'cancelled'
+            return
         jobs[job_id]['status'] = 'failed'
         # Exception text can embed URLs with credentials (e.g. the proxy URL
         # inside a yt-dlp/httpx error) — scrub before it reaches client logs.
         jobs[job_id]['logs'].append(_scrub_secrets(f"Execution error: {str(e)}"))
+    finally:
+        _job_processes.pop(job_id, None)
+
+
+# --- Cancelling a job -----------------------------------------------------------
+_job_processes: Dict[str, Any] = {}   # job id -> the Popen of its running main.py
+_CANCELLED_FILE = ".cancelled"
+CANCEL_MESSAGE = "Cancelled by the user."
+
+
+def _is_cancelled(job_id) -> bool:
+    return (jobs.get(job_id) or {}).get('status') == 'cancelled'
+
+
+def _descendant_pids(pid):
+    """Every process below ``pid`` (POSIX ``ps``), children first."""
+    try:
+        out = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "ppid="],
+                             capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return []
+    children = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            children.setdefault(int(parts[1]), []).append(int(parts[0]))
+    found, todo = [], [pid]
+    while todo:
+        for child in children.get(todo.pop(), []):
+            if child not in found:
+                found.append(child)
+                todo.append(child)
+    return found
+
+
+def _kill_job_process(process):
+    """Stop a job's main.py and what it started (ffmpeg, yt-dlp). The child
+    shares the API's process group (Ctrl-C and the drain rely on that), so the
+    tree is walked instead of killing a group."""
+    if os.name == "nt":
+        with suppress(Exception):
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                           capture_output=True, timeout=30)
+        with suppress(Exception):
+            process.kill()
+        return
+    tree = _descendant_pids(process.pid)  # before they lose their parent
+    with suppress(Exception):
+        process.kill()
+    # shortcut: a child started between the snapshot and the kill survives; fine for a user cancel.
+    for pid in tree:
+        with suppress(ProcessLookupError, PermissionError):
+            os.kill(pid, signal.SIGKILL)
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str, request: Request):
+    """Cancel a queued or running job. Unlike a drain, it is final: the resume
+    manifest goes, the reservation is released, and it is never resumed."""
+    job = jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    await _assert_job_owner(request, job)
+    status = job.get('status')
+    if status not in ('queued', 'processing'):
+        raise HTTPException(status_code=409, detail=f"This job is already {status}: nothing to cancel.")
+    job['cancel_requested'] = True
+    job['status'] = 'cancelled'
+    job['logs'].append(CANCEL_MESSAGE)
+    _clear_resume_manifest(job_id)
+    with suppress(OSError):
+        open(os.path.join(OUTPUT_DIR, job_id, _CANCELLED_FILE), "w").close()
+    if status == 'queued':
+        # The worker skips it on dequeue; nothing else will settle it.
+        await _settle_reservation(job_id, job)
+        await _notify_job_webhook(job_id)
+    else:
+        # run_job sees the exit and keeps 'cancelled'; its wrapper settles the
+        # reservation and frees the slot as for any finished job.
+        process = _job_processes.get(job_id)
+        if process is not None and process.poll() is None:
+            await asyncio.get_event_loop().run_in_executor(None, _kill_job_process, process)
+    return {"job_id": job_id, "status": "cancelled"}
+
+
+def _job_source_label(job):
+    """The link of a URL job, or the uploaded file's name."""
+    url = _job_source_url(job)
+    if url:
+        return url
+    cmd = list((job or {}).get('cmd') or [])
+    for i, arg in enumerate(cmd[:-1]):
+        if arg in ('-i', '--input'):
+            return os.path.basename(str(cmd[i + 1])).split("_", 1)[-1]
+    return None
+
+
+@app.get("/api/jobs/active")
+async def active_jobs(request: Request):
+    """The caller's queued and processing jobs (self-host: all of them)."""
+    owner = await _owner_id(request)
+    if BILLING_ENABLED and owner is None:
+        raise HTTPException(status_code=401, detail="Sign in to list your jobs")
+    out = []
+    for job_id, job in list(jobs.items()):
+        if job.get('status') not in ('queued', 'processing'):
+            continue
+        if BILLING_ENABLED and str(job.get('user_id')) != str(owner):
+            continue
+        logs = _visible_logs_timed(job.get('logs') or [])[0]
+        out.append({"job_id": job_id, "status": job['status'],
+                    "position": (queue_snapshot(job_id) or {}).get('position'),
+                    "stage": str(logs[-1])[:200] if logs else None,
+                    "source": _job_source_label(job), "started_at": job.get('started_at')})
+    return {"jobs": out}
+
 
 @app.get("/health")
 async def health():
@@ -5585,6 +5725,16 @@ SLOT_LIBRARY_MAX_ITEMS = int(os.environ.get("SLOT_LIBRARY_MAX_ITEMS", "30"))
 _slot_library_lock = asyncio.Lock()
 
 
+SLOT_LIBRARY_IMPORT_DIR = os.environ.get("SLOT_LIBRARY_IMPORT_DIR") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "split_library")
+
+
+def _slot_dirs_for(owner):
+    key = slot_library.owner_key(owner)
+    return (os.path.join(UPLOAD_DIR, "slot_library", key),
+            os.path.join(THUMBNAILS_DIR, f"slot_{key}"), f"/thumbnails/slot_{key}")
+
+
 async def _slot_library_dirs(request):
     """(video_dir, thumb_dir, thumb_url_prefix) of the caller's library.
     Videos sit under uploads/ (never served); thumbnails under the authorised
@@ -5593,12 +5743,10 @@ async def _slot_library_dirs(request):
     owner = await _owner_id(request)
     if BILLING_ENABLED and owner is None:
         raise HTTPException(status_code=401, detail="Sign in to use the clip library")
-    key = slot_library.owner_key(owner)
-    thumb_dir = os.path.join(THUMBNAILS_DIR, f"slot_{key}")
+    video_dir, thumb_dir, prefix = _slot_dirs_for(owner)
     if owner is not None:
         _write_owner_marker(thumb_dir, owner)
-    return (os.path.join(UPLOAD_DIR, "slot_library", key), thumb_dir,
-            f"/thumbnails/slot_{key}")
+    return video_dir, thumb_dir, prefix
 
 
 def _slot_item_view(item, thumb_prefix):
@@ -5608,16 +5756,110 @@ def _slot_item_view(item, thumb_prefix):
             "thumb": f"{thumb_prefix}/{item['thumb']}" if item.get("thumb") else None}
 
 
+async def _slot_store(video_dir, thumb_dir, path, ext, name):
+    """Validate a video file and move it into the library (``path`` is moved
+    only on success). The trust boundary: the extension and any client MIME
+    prove nothing, so the bytes, ffprobe and the duration decide."""
+    if not slot_library.sniff_container(path):
+        raise HTTPException(status_code=415, detail="This file is not a video.")
+    loop = asyncio.get_event_loop()
+    try:
+        w, h, duration, has_audio = await loop.run_in_executor(None, slot_split.probe_video, path)
+    except slot_split.SlotError as e:
+        raise HTTPException(status_code=415, detail=str(e))
+    if not 0 < duration <= SLOT_UPLOAD_MAX_SECONDS:
+        raise HTTPException(status_code=413, detail=f"Clips must be at most {SLOT_UPLOAD_MAX_SECONDS:.0f}s long.")
+    async with _slot_library_lock:
+        if len(slot_library.list_items(video_dir)) >= SLOT_LIBRARY_MAX_ITEMS:
+            raise HTTPException(status_code=409, detail=f"The library holds at most {SLOT_LIBRARY_MAX_ITEMS} clips. Delete one first.")
+        return await loop.run_in_executor(
+            None, slot_library.add, video_dir, thumb_dir, path, ext, name[:120],
+            {"width": w, "height": h, "duration": round(duration, 2), "has_audio": has_audio})
+
+
+def _slot_url_fetch(url, work_dir, allow_paid, route):
+    """Blocking: the first SLOT_UPLOAD_MAX_SECONDS of ``url`` through the job
+    download path (ssrf_guard, noplaylist, client list, cookies then anonymous,
+    direct -> static [-> paid]). Returns (path or None, title)."""
+    from main import download_youtube_video
+    cap = max(1.0, SLOT_UPLOAD_MAX_SECONDS - 1.0)  # a re-encoded range can run a frame long
+    pieces, title = download_youtube_video(url, work_dir, allow_paid=allow_paid,
+                                           route_out=route, ranges=[(0.0, cap)])
+    return (pieces or [None])[0], title
+
+
+async def _slot_download_url(url, work_dir):
+    """(path, title) of a link fetched server-side for the library. Free routes
+    first; the per-GB proxy only for YouTube, within budget, and only when the
+    free failure is one another IP can fix (static_failure_warrants_paid)."""
+    if DISABLE_YOUTUBE_URL:
+        raise HTTPException(status_code=403, detail="URL ingest is disabled on this deployment. Upload a file instead.")
+    await _validate_source_url(url)
+    from main import is_youtube_url
+    from yt_clients import NotASingleVideo
+    loop = asyncio.get_event_loop()
+    route = {}
+    try:
+        try:
+            return await loop.run_in_executor(None, _slot_url_fetch, url, work_dir, False, route)
+        except NotASingleVideo:
+            raise
+        except Exception as e:
+            from cloud.metering import static_failure_warrants_paid
+            if not (os.environ.get("PROXY_URL", "").strip() and is_youtube_url(url)
+                    and static_failure_warrants_paid(e)
+                    and not await _paid_proxy_budget_exceeded()):
+                raise
+            route.clear()
+            return await loop.run_in_executor(None, _slot_url_fetch, url, work_dir, True, route)
+    except NotASingleVideo as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Slot link download failed: {str(e)[:200]}")
+        raise HTTPException(status_code=400, detail="Could not download that link.")
+    finally:
+        if BILLING_ENABLED and route:
+            try:
+                from cloud import proxy_ledger as _pl
+                await _pl.record_download(f"slot_{uuid.uuid4().hex}", route, url)
+            except Exception as e:
+                print(f"⚠️ Could not record slot download route: {e}")
+
+
 @app.post("/api/slot-uploads")
-async def slot_upload(request: Request, file: UploadFile = File(...)):
+async def slot_upload(request: Request, file: Optional[UploadFile] = File(None),
+                      url: Optional[str] = Form(None), name: Optional[str] = Form(None)):
+    """Add a video to the caller's library: a ``file``, or a ``url`` the
+    server downloads (its first SLOT_UPLOAD_MAX_SECONDS). ``name`` overrides
+    the shown name."""
     video_dir, thumb_dir, prefix = await _slot_library_dirs(request)
-    name = os.path.basename((file.filename or "").replace("\\", "/")) or "upload"
-    ext = os.path.splitext(name)[1].lower()
+    url = (url or "").strip() or None
+    if (file is None) == (url is None):
+        raise HTTPException(status_code=400, detail="Send either a file or a url.")
+    label = " ".join(str(name or "").split())[:120] or None
+    os.makedirs(video_dir, exist_ok=True)
+    limit = SLOT_UPLOAD_MAX_MB * 1024 * 1024
+    if url:
+        work = os.path.join(video_dir, f".dl_{uuid.uuid4().hex}")
+        os.makedirs(work)
+        try:
+            path, title = await _slot_download_url(url, work)
+            ext = os.path.splitext(path or "")[1].lower()
+            if not path or not os.path.isfile(path) or ext not in slot_library.ALLOWED_EXTENSIONS:
+                raise HTTPException(status_code=400, detail="Could not download that link.")
+            if os.path.getsize(path) > limit:
+                raise HTTPException(status_code=413, detail=f"File too large. Max size {SLOT_UPLOAD_MAX_MB}MB")
+            item = await _slot_store(video_dir, thumb_dir, path, ext, label or str(title or "link"))
+            return _slot_item_view(item, prefix)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+    fname = os.path.basename((file.filename or "").replace("\\", "/")) or "upload"
+    ext = os.path.splitext(fname)[1].lower()
     if ext not in slot_library.ALLOWED_EXTENSIONS:
         raise HTTPException(status_code=415, detail="Upload an MP4, MOV, WebM or MKV video.")
-    os.makedirs(video_dir, exist_ok=True)
     tmp = os.path.join(video_dir, f".tmp_{uuid.uuid4().hex}")
-    limit = SLOT_UPLOAD_MAX_MB * 1024 * 1024
     size = 0
     try:
         with open(tmp, "wb") as out:
@@ -5626,26 +5868,75 @@ async def slot_upload(request: Request, file: UploadFile = File(...)):
                 if size > limit:
                     raise HTTPException(status_code=413, detail=f"File too large. Max size {SLOT_UPLOAD_MAX_MB}MB")
                 out.write(chunk)
-        # Trust boundary: the extension and the client MIME prove nothing.
-        if not slot_library.sniff_container(tmp):
-            raise HTTPException(status_code=415, detail="This file is not a video.")
-        loop = asyncio.get_event_loop()
-        try:
-            w, h, duration, has_audio = await loop.run_in_executor(None, slot_split.probe_video, tmp)
-        except slot_split.SlotError as e:
-            raise HTTPException(status_code=415, detail=str(e))
-        if not 0 < duration <= SLOT_UPLOAD_MAX_SECONDS:
-            raise HTTPException(status_code=413, detail=f"Clips must be at most {SLOT_UPLOAD_MAX_SECONDS:.0f}s long.")
-        async with _slot_library_lock:
-            if len(slot_library.list_items(video_dir)) >= SLOT_LIBRARY_MAX_ITEMS:
-                raise HTTPException(status_code=409, detail=f"The library holds at most {SLOT_LIBRARY_MAX_ITEMS} clips. Delete one first.")
-            item = await loop.run_in_executor(
-                None, slot_library.add, video_dir, thumb_dir, tmp, ext, name[:120],
-                {"width": w, "height": h, "duration": round(duration, 2), "has_audio": has_audio})
+        item = await _slot_store(video_dir, thumb_dir, tmp, ext, label or fname)
         return _slot_item_view(item, prefix)
     finally:
         if os.path.exists(tmp):
             os.remove(tmp)
+
+
+def _slot_copy_nofollow(src, dst, limit):
+    """Copy a regular file without following a symlink at ``src``; False when
+    it is not a regular file or is over ``limit`` bytes."""
+    import stat
+    fd = os.open(src, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > limit:
+            return False
+        with os.fdopen(os.dup(fd), "rb") as f, open(dst, "wb") as out:
+            shutil.copyfileobj(f, out, 1024 * 1024)
+        return True
+    finally:
+        os.close(fd)
+
+
+async def _slot_import_folder(video_dir, thumb_dir, import_dir=None):
+    """Import the videos placed in SLOT_LIBRARY_IMPORT_DIR: regular files
+    directly in it (no subdirectories, no symlinks), named by their stem.
+    A valid file leaves the folder; an invalid one stays and is reported by
+    name only."""
+    import_dir = import_dir or SLOT_LIBRARY_IMPORT_DIR
+    imported, skipped = [], []
+    try:
+        entries = sorted(os.scandir(import_dir), key=lambda e: e.name)
+    except OSError:
+        return {"imported": imported, "skipped": skipped}
+    limit = SLOT_UPLOAD_MAX_MB * 1024 * 1024
+    for entry in entries:
+        ext = os.path.splitext(entry.name)[1].lower()
+        if entry.name.startswith(".") or ext not in slot_library.ALLOWED_EXTENSIONS:
+            continue
+        if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+            skipped.append(entry.name)
+            continue
+        os.makedirs(video_dir, exist_ok=True)
+        tmp = os.path.join(video_dir, f".tmp_{uuid.uuid4().hex}")
+        try:
+            if not await asyncio.get_event_loop().run_in_executor(
+                    None, _slot_copy_nofollow, entry.path, tmp, limit):
+                skipped.append(entry.name)
+                continue
+            await _slot_store(video_dir, thumb_dir, tmp, ext, os.path.splitext(entry.name)[0])
+            os.remove(entry.path)
+            imported.append(entry.name)
+        except (HTTPException, OSError) as e:
+            print(f"Slot import skipped {entry.name}: {getattr(e, 'detail', e)}")
+            skipped.append(entry.name)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+    return {"imported": imported, "skipped": skipped}
+
+
+@app.post("/api/slot-uploads/import")
+async def slot_uploads_import(request: Request):
+    """Import SLOT_LIBRARY_IMPORT_DIR into the caller's library. Self-host
+    only: the folder is the operator's, never shared across cloud accounts."""
+    video_dir, thumb_dir, _prefix = await _slot_library_dirs(request)
+    if BILLING_ENABLED:
+        raise HTTPException(status_code=404, detail="Not found")
+    return await _slot_import_folder(video_dir, thumb_dir)
 
 
 @app.get("/api/slot-uploads")
