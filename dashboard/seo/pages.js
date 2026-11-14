@@ -627,7 +627,7 @@ hub</a>.</p>
 <li>Clone the repository from GitHub and start it with <code>docker compose up --build</code>.</li>
 <li>Create a Google Gemini API key. The free tier covers 1,500 requests a day, which is far more than a single creator uses.</li>
 <li>Paste a YouTube link or upload a local file. Podcasts, webinars, livestreams, interviews and vlogs all work.</li>
-<li>The pipeline transcribes, detects scenes, scores moments and returns 3 to 15 clips of 15 to 60 seconds each, already cropped to 9:16 with subtitles burned in.</li>
+<li>The pipeline transcribes, detects scenes, scores moments and returns 3 to 15 clips of 30 to 60 seconds each, already cropped to 9:16 with subtitles burned in.</li>
 <li>Download them, or connect an account and post straight to TikTok, Instagram Reels and YouTube Shorts.</li>
 </ol>
 
@@ -682,7 +682,7 @@ ${faqBlock([
   },
   {
     q: 'How many clips does it generate per video?',
-    a: 'Between 3 and 15, each 15 to 60 seconds long. The number depends on how much of the source actually holds up as a standalone clip rather than on a fixed quota.',
+    a: 'Between 3 and 15, each 30 to 60 seconds long. The number depends on how much of the source actually holds up as a standalone clip rather than on a fixed quota.',
   },
   {
     q: 'Is there a free clipping website that needs no install?',
@@ -709,7 +709,7 @@ ${faqBlock([
     },
     {
       q: 'How many clips does it generate per video?',
-      a: 'Between 3 and 15 clips, each 15 to 60 seconds long.',
+      a: 'Between 3 and 15 clips, each 30 to 60 seconds long.',
     },
     {
       q: 'Is there a free clipping website that needs no install?',
@@ -847,7 +847,7 @@ ${pricingParagraph('how')}
 ${faqBlock([
   {
     q: 'What AI model does OpenShorts use to find viral moments?',
-    a: 'Google Gemini 3.1 Flash-Lite. It receives the word-level transcript with timestamps together with PySceneDetect scene boundaries, and returns 3 to 15 segments of 15 to 60 seconds scored on hook strength, emotional payload and whether the segment stands alone without surrounding context.',
+    a: 'Google Gemini 3.1 Flash-Lite. It receives the word-level transcript with timestamps together with PySceneDetect scene boundaries, and returns 3 to 15 segments of 30 to 60 seconds scored on hook strength, emotional payload and whether the segment stands alone without surrounding context.',
   },
   {
     q: 'How does the automatic vertical cropping work?',
@@ -862,7 +862,7 @@ ${faqBlock([
   faq: [
     {
       q: 'What AI model does OpenShorts use to find viral moments?',
-      a: 'Google Gemini 3.1 Flash-Lite, which receives the word-level transcript with timestamps together with PySceneDetect scene boundaries and returns 3 to 15 segments of 15 to 60 seconds.',
+      a: 'Google Gemini 3.1 Flash-Lite, which receives the word-level transcript with timestamps together with PySceneDetect scene boundaries and returns 3 to 15 segments of 30 to 60 seconds.',
     },
     {
       q: 'How does the automatic vertical cropping work?',
@@ -997,7 +997,7 @@ const podcastToShorts = () => ({
   facts: [
     { k: 'Two speakers', v: 'Both in frame', s: 'Stacked split layout on real two-shots' },
     { k: 'Episode length', v: '1-2 hours', s: 'The design case, not the limit' },
-    { k: 'Clips per episode', v: '3 to 15', s: '15 to 60 seconds each, captions burned in' },
+    { k: 'Clips per episode', v: '3 to 15', s: '30 to 60 seconds each, captions burned in' },
     { k: 'Cost', v: '$0', s: 'Self-hosted; hosted from $12/month' },
   ],
   title: 'Podcast Clip Maker: AI Clips From Video Podcasts',
@@ -1023,7 +1023,7 @@ const podcastToShorts = () => ({
   ],
   body: `
 <h2>What a podcast clip maker does</h2>
-<p>Podcast clips are the 15 to 60 second moments of an episode that stand on
+<p>Podcast clips are the 30 to 60 second moments of an episode that stand on
 their own: a sharp answer, a disagreement, a story with a punchline, cut to 9:16
 with captions for TikTok, Reels and Shorts. A podcast clip maker finds those
 moments in a full episode for you, reframes them and burns in the subtitles, so
@@ -1054,7 +1054,7 @@ one side of the table.</p>
 <ol>
 <li>Paste the episode's YouTube link or upload the file. Podcasts of an hour or more are the normal case, not the limit.</li>
 <li>faster-whisper transcribes with word-level timestamps, and PySceneDetect maps the cuts.</li>
-<li>Google Gemini reads the transcript against the scene boundaries and returns the 3 to 15 segments that stand alone best, 15 to 60 seconds each.</li>
+<li>Google Gemini reads the transcript against the scene boundaries and returns the 3 to 15 segments that stand alone best, 30 to 60 seconds each.</li>
 <li>Each segment is reframed for its content: split layout for two-shots, face tracking for single speakers, screencast layout if the episode shares a screen.</li>
 <li>Subtitles are burned in from the word-level transcript, and finished clips post directly to TikTok, Instagram Reels and YouTube Shorts, or come back through the API.</li>
 </ol>
@@ -1064,7 +1064,7 @@ the <a href="/use-cases/sermons">sermon clip maker</a> page covers clipping only
 the sermon and keeping a preacher who walks the stage in frame.</p>
 
 <h2>Podcast to TikTok, Reels and Shorts</h2>
-<p>Video podcast clips are the same file on every platform: vertical, 15 to 60
+<p>Video podcast clips are the same file on every platform: vertical, 30 to 60
 seconds by default, captions burned in for the people who watch on mute.
 Connect your accounts once and each clip publishes to YouTube Shorts and
 Instagram Reels directly. Podcast to TikTok works the same way with one
@@ -1181,7 +1181,7 @@ const youtubeConverter = () => ({
   relatedTitle: 'Related tools',
   published: '2026-08-04',
   updated: REVISED,
-  lede: `OpenShorts is an AI YouTube to Shorts converter: paste a YouTube link and it picks the 3 to 15 strongest moments of 15 to 60 seconds, reframes each one to 9:16 around the person speaking and burns in captions, ready for Shorts, TikTok and Reels. Your first video is free up to 60 minutes (watermarked, no card); no watermark from $${CLOUD.lowPrice}/month, or self-host it free under MIT.`,
+  lede: `OpenShorts is an AI YouTube to Shorts converter: paste a YouTube link and it picks the 3 to 15 strongest moments of 30 to 60 seconds, reframes each one to 9:16 around the person speaking and burns in captions, ready for Shorts, TikTok and Reels. Your first video is free up to 60 minutes (watermarked, no card); no watermark from $${CLOUD.lowPrice}/month, or self-host it free under MIT.`,
   pasteLink: { placeholder: 'https://www.youtube.com/watch?v=...', label: 'YouTube video link' },
   tldr: [
     'Paste a YouTube link in the box below and get back 3 to 15 vertical clips with subtitles, sized for Shorts, Reels and TikTok. No downloading the source and re-uploading it first.',
@@ -1193,7 +1193,7 @@ const youtubeConverter = () => ({
 <ol>
 <li>Paste a YouTube link in the box on this page. OpenShorts fetches the video itself; there is no download-then-upload round trip through your machine.</li>
 <li>The video is transcribed with word-level timestamps and scanned for scene boundaries.</li>
-<li>Google Gemini scores the transcript against the scenes and picks the 3 to 15 segments most likely to stand alone, 15 to 60 seconds each.</li>
+<li>Google Gemini scores the transcript against the scenes and picks the 3 to 15 segments most likely to stand alone, 30 to 60 seconds each.</li>
 <li>Each segment is cropped to 9:16 with face tracking, or a split or screencast layout when the content calls for it, and subtitles are burned in.</li>
 <li>Download the clips, or post them straight to YouTube Shorts, TikTok and Instagram Reels from the dashboard or the API.</li>
 </ol>
@@ -1209,7 +1209,7 @@ imports from its paid plans, and SendShort only clips long videos from its
 $29/month plan up.</p>
 
 <h2>What comes out the other end</h2>
-<p>Vertical 9:16 clips of 15 to 60 seconds with word-level subtitles burned in,
+<p>Vertical 9:16 clips of 30 to 60 seconds with word-level subtitles burned in,
 each with an AI-written title and description ready for the platform. The
 reframing follows the content: a single speaker is face-tracked with a
 stabiliser that holds the camera still instead of chasing every head movement, a
@@ -2687,7 +2687,7 @@ only one of them spans the frame and cannot be cropped.</p>
 <ol>
 <li>Paste the VOD link (a Twitch export, a YouTube upload) or drop the local recording in. Multi-hour sources are the normal case here, not the edge case.</li>
 <li>faster-whisper transcribes with word-level timestamps and PySceneDetect maps the cuts, which is what keeps a clip from opening mid-explosion.</li>
-<li>Gemini reads the transcript against those boundaries and returns the 3 to 15 segments that stand alone best, 15 to 60 seconds each.</li>
+<li>Gemini reads the transcript against those boundaries and returns the 3 to 15 segments that stand alone best, 30 to 60 seconds each.</li>
 <li>Leave the vertical layout on <strong>auto</strong> (dashboard, advanced options; <code>"layouts": ["auto"]</code> on the API). Auto is what enables the screen layouts, and the inset detector is chained behind them.</li>
 <li>Subtitles are burned in from the word-level transcript. On gaming feeds this is not optional polish: the clips autoplay muted.</li>
 <li>Download the clips, or post them straight to TikTok, YouTube Shorts and Instagram Reels from the dashboard or the API.</li>
@@ -2716,7 +2716,7 @@ with an audio track but little speech (music-only streams, a mic that was
 muted for part of the session) is judged stretch by stretch: any stretch of 30
 seconds or more at 5 words per minute or fewer becomes non-speech windows, ranked
 by audio energy, plus the "most replayed" heat for YouTube links only, and cut
-around the loudest moment in the same 15 to 60 second band, with no model
+around the loudest moment in the same 30 to 60 second band, with no model
 watching anything (a model only writes the title from text). Footage with no
 audio track at all, or under 8 words (or under 5 words per minute) overall with
 no audio or heat signal to rank, goes to Gemini instead, which watches the video
@@ -2753,7 +2753,7 @@ fine, and the platforms strike it.</p>
 ${faqBlock([
   {
     q: 'How do I make GTA 5 clips for TikTok?',
-    a: 'Paste the stream VOD link into OpenShorts with the vertical layout set to auto. It transcribes the whole recording, has Gemini pick the 3 to 15 strongest 15 to 60 second moments out of what was said, reframes each one to 9:16 keeping the gameplay full width with your facecam enlarged below it, and burns in word-level subtitles. Clips download or post straight to TikTok, Reels and Shorts.',
+    a: 'Paste the stream VOD link into OpenShorts with the vertical layout set to auto. It transcribes the whole recording, has Gemini pick the 3 to 15 strongest 30 to 60 second moments out of what was said, reframes each one to 9:16 keeping the gameplay full width with your facecam enlarged below it, and burns in word-level subtitles. Clips download or post straight to TikTok, Reels and Shorts.',
   },
   {
     q: 'Can it handle a whole eight-hour GTA RP stream?',
@@ -2785,7 +2785,7 @@ ${trademarkNote('Grand Theft Auto, GTA, Rockstar Games and Twitch', 'Rockstar Ga
   faq: [
     {
       q: 'How do I make GTA 5 clips for TikTok?',
-      a: 'Paste the stream VOD into OpenShorts with the vertical layout on auto: it transcribes the recording, picks the 3 to 15 strongest 15 to 60 second moments, reframes each to 9:16 keeping the gameplay full width with the facecam enlarged below, and burns in subtitles.',
+      a: 'Paste the stream VOD into OpenShorts with the vertical layout on auto: it transcribes the recording, picks the 3 to 15 strongest 30 to 60 second moments, reframes each to 9:16 keeping the gameplay full width with the facecam enlarged below, and burns in subtitles.',
     },
     {
       q: 'Can it handle a whole eight-hour GTA RP stream?',
@@ -2827,7 +2827,7 @@ ${trademarkNote('Grand Theft Auto, GTA, Rockstar Games and Twitch', 'Rockstar Ga
         {
           '@type': 'HowToStep',
           name: 'Let the AI pick the moments',
-          text: 'The VOD is transcribed with word-level timestamps and scanned for scene cuts, then Gemini scores the transcript and returns the 3 to 15 strongest segments of 15 to 60 seconds.',
+          text: 'The VOD is transcribed with word-level timestamps and scanned for scene cuts, then Gemini scores the transcript and returns the 3 to 15 strongest segments of 30 to 60 seconds.',
         },
         {
           '@type': 'HowToStep',
@@ -2959,7 +2959,7 @@ const gta6Steps = [
   ['Bring the footage', 'Paste a Twitch VOD link (twitch.tv/videos/...), a Twitch clip of 45 seconds or more, or a YouTube link, or upload the capture from your console or capture card. Footage needs at least 45 seconds of material.'],
   ['Pick the stretch', 'For a long session, use "clip only part of it" to set a start and an end. Only that stretch is downloaded, analysed and billed.'],
   ['Leave the layout on auto', 'With the vertical layout on auto (the default; "layouts": ["auto"] on the API) a facecam in a corner becomes INSET, and full-frame action becomes WIDE, zoomed around the motion.'],
-  ['Let the AI pick the moments', 'With commentary, Gemini ranks the transcript for stretches that stand alone. With almost no speech, Gemini watches the footage instead. Either way the clips are 15 to 60 seconds and 9:16.'],
+  ['Let the AI pick the moments', 'With commentary, Gemini ranks the transcript for stretches that stand alone. With almost no speech, Gemini watches the footage instead. Either way the clips are 30 to 60 seconds and 9:16.'],
   ['Check for spoilers, then post', 'Review each clip, then download it or post it to TikTok, YouTube Shorts and Instagram Reels from the dashboard or the API. The AI does not know what counts as a story spoiler.'],
 ]
 
@@ -3001,7 +3001,7 @@ PC, upload it to OpenShorts from the browser.</p>`,
   },
   {
     q: 'How do I turn GTA 6 gameplay into TikToks?',
-    a: 'Upload the capture or paste the stream VOD link into OpenShorts with the vertical layout on auto. It picks the moments worth posting, cuts each into a 15 to 60 second 9:16 clip, keeps your facecam if the footage has one, and burns in captions when there is speech. Post to TikTok, Shorts and Reels from the dashboard, or download.',
+    a: 'Upload the capture or paste the stream VOD link into OpenShorts with the vertical layout on auto. It picks the moments worth posting, cuts each into a 30 to 60 second 9:16 clip, keeps your facecam if the footage has one, and burns in captions when there is speech. Post to TikTok, Shorts and Reels from the dashboard, or download.',
     detail: `${ol(gta6Steps.map(([n, t]) => `<strong>${esc(n)}.</strong> ${esc(t)}`))}`,
   },
   {
@@ -3021,9 +3021,9 @@ ${gameLayoutDiagram('The two gameplay layouts, drawn to scale on a 1080 x 1920 f
   },
   {
     q: 'What is the best length for a GTA 6 TikTok or Short?',
-    a: 'There is no single best length. OpenShorts cuts 15 to 60 seconds by default, because most moments that stand on their own fit in that, and you can raise the maximum to 180 seconds. YouTube Shorts and Instagram Reels accept up to 3 minutes, and TikTok accepts longer uploads. Keep the chase, cut the drive to it.',
+    a: 'There is no single best length. OpenShorts cuts 30 to 60 seconds by default, because most moments that stand on their own fit in that, and you can raise the maximum to 90 seconds. YouTube Shorts and Instagram Reels accept up to 3 minutes, and TikTok accepts longer uploads. Keep the chase, cut the drive to it.',
     detail: `<p>Set the range in the advanced options before the job runs: the minimum
-anywhere from 5 to 175 seconds and the maximum from 10 to 180. After the job,
+anywhere from 5 to 85 seconds and the maximum from 10 to 90. After the job,
 the clip editor trims or extends a clip on word boundaries without using
 minutes. Shorts' 3-minute limit is from YouTube's help pages (checked 28
 October 2026); Instagram raised Reels to 3 minutes in January 2025.</p>`,
@@ -3107,7 +3107,7 @@ const gta6Clips = () => ({
   description:
     `Turn GTA 6 streams and PS5 or Xbox captures into TikToks, Shorts and Reels: facecam kept, silent gameplay handled. From $${CLOUD.lowPrice}/month, or self-host free.`,
   h1: 'Make GTA 6 clips: turn your streams and console captures into TikToks',
-  lede: `OpenShorts turns GTA 6 footage into vertical clips: paste your Twitch or YouTube VOD, or upload a console capture, and it picks the moments worth posting and cuts them into 15 to 60 second 9:16 clips for TikTok, YouTube Shorts and Instagram Reels. Your first video is free up to 60 minutes (watermarked, no card); no watermark from $${CLOUD.lowPrice}/month, or self-host it free under MIT.`,
+  lede: `OpenShorts turns GTA 6 footage into vertical clips: paste your Twitch or YouTube VOD, or upload a console capture, and it picks the moments worth posting and cuts them into 30 to 60 second 9:16 clips for TikTok, YouTube Shorts and Instagram Reels. Your first video is free up to 60 minutes (watermarked, no card); no watermark from $${CLOUD.lowPrice}/month, or self-host it free under MIT.`,
   breadcrumb: [{ name: 'Use cases', path: '/use-cases' }, { name: 'GTA 6 clips' }],
   published: '2026-11-04',
   updated: TWITCH_AUTOPILOT_UPDATED,
@@ -3197,7 +3197,7 @@ const wowSteps = [
   ['Bring the recording', 'Paste the twitch.tv/videos/ link of the stream, a Twitch clip of 45 seconds or more, or a YouTube link, or upload the file from OBS, Warcraft Recorder or your GPU\'s replay tool. Sources need at least 45 seconds of material.'],
   ['Pick the pulls you care about', 'On a long raid night, use "clip only part of it" to set a start and an end around the kill or the wipe. Only that stretch is downloaded, analysed and billed.'],
   ['Leave the layout on auto', 'A facecam in a corner becomes INSET (game on top, face below); a full-screen fight becomes WIDE, zoomed around the motion.'],
-  ['Let the AI pick the moments', 'With voice chat or commentary, Gemini ranks the transcript for stretches that stand alone. With almost no speech, Gemini watches the footage instead. Clips are 15 to 60 seconds by default.'],
+  ['Let the AI pick the moments', 'With voice chat or commentary, Gemini ranks the transcript for stretches that stand alone. With almost no speech, Gemini watches the footage instead. Clips are 30 to 60 seconds by default.'],
   ['Review and post', 'Fix a crop or a cut in the clip editor if needed, then post to TikTok, YouTube Shorts and Instagram Reels from the dashboard or the API, or download.'],
 ]
 
@@ -3218,7 +3218,7 @@ OBS scene; that is the layout OpenShorts turns into INSET.</p>`,
   },
   {
     q: 'How do I turn a WoW Twitch stream into TikToks or Shorts?',
-    a: 'Paste the twitch.tv/videos/ link of the past broadcast into OpenShorts, or a Twitch clip of 45 seconds or more. It reads what you and your raid said across the whole stream, picks the passages that stand alone, and cuts them into 15 to 60 second vertical clips with captions, and a corner facecam kept below the game.',
+    a: 'Paste the twitch.tv/videos/ link of the past broadcast into OpenShorts, or a Twitch clip of 45 seconds or more. It reads what you and your raid said across the whole stream, picks the passages that stand alone, and cuts them into 30 to 60 second vertical clips with captions, and a corner facecam kept below the game.',
     detail: `${ol(wowSteps.map(([n, t]) => `<strong>${esc(n)}.</strong> ${esc(t)}`))}
 <p>A channel page is the live channel, not a recording; the VOD is under Videos
 on the channel. A raid night of three or four hours is analysed the same way as
@@ -3270,9 +3270,9 @@ then.</p>`,
   },
   {
     q: 'How long should a WoW clip be for TikTok, Shorts or Reels?',
-    a: 'OpenShorts cuts 15 to 60 seconds by default, which fits most moments that stand alone, and you can raise the maximum to 180 seconds for a full boss kill that needs context. YouTube Shorts and Instagram Reels accept up to 3 minutes, and TikTok accepts longer uploads. Start on the action, not the pull countdown.',
+    a: 'OpenShorts cuts 30 to 60 seconds by default, which fits most moments that stand alone, and you can raise the maximum to 90 seconds for a full boss kill that needs context. YouTube Shorts and Instagram Reels accept up to 3 minutes, and TikTok accepts longer uploads. Start on the action, not the pull countdown.',
     detail: `<p>Set the range in the advanced options before the job: the minimum
-anywhere from 5 to 175 seconds and the maximum from 10 to 180. Trimming or
+anywhere from 5 to 85 seconds and the maximum from 10 to 90. Trimming or
 extending a clip afterwards in the editor does not use minutes. YouTube's
 3-minute Shorts limit is from its help pages (checked 28 October 2026);
 Instagram raised Reels to 3 minutes in January 2025.</p>`,
@@ -3315,7 +3315,7 @@ const wowForeverClips = () => ({
   description:
     `Record WoW Forever raids with OBS or Warcraft Recorder, then turn kills, wipes and Twitch VODs into TikToks. From $${CLOUD.lowPrice}/month, or self-host free.`,
   h1: 'WoW Forever clips: turn raids and streams into TikToks, Shorts and Reels',
-  lede: `How to record World of Warcraft: Forever, and how to turn the recording or your Twitch VOD into 15 to 60 second vertical clips for TikTok, YouTube Shorts and Instagram Reels with OpenShorts, facecam kept. Your first video is free up to 60 minutes (watermarked, no card); no watermark from $${CLOUD.lowPrice}/month, or self-host it free under MIT.`,
+  lede: `How to record World of Warcraft: Forever, and how to turn the recording or your Twitch VOD into 30 to 60 second vertical clips for TikTok, YouTube Shorts and Instagram Reels with OpenShorts, facecam kept. Your first video is free up to 60 minutes (watermarked, no card); no watermark from $${CLOUD.lowPrice}/month, or self-host it free under MIT.`,
   breadcrumb: [{ name: 'Use cases', path: '/use-cases' }, { name: 'WoW Forever clips' }],
   published: '2026-11-04',
   updated: TWITCH_AUTOPILOT_UPDATED,

@@ -161,7 +161,7 @@ const SITES_LIST = 'YouTube, Vimeo, TikTok, X (Twitter), Twitch, Kick, Facebook,
 
 const ytClipSteps = [
   ['Paste the YouTube link', 'Copy the address of the video (a watch link, a youtu.be share link, a Shorts link or the replay of a finished livestream) and paste it in the box. OpenShorts fetches the video itself, so there is nothing to download first.'],
-  ['The AI finds the moments', 'The audio is transcribed word by word and the video is scanned for cuts. Google Gemini then scores the whole transcript in windows of about 90 seconds, shortlists the strongest and cuts each moment so it opens on a complete thought, 15 to 60 seconds long unless you set other limits.'],
+  ['The AI finds the moments', 'The audio is transcribed word by word and the video is scanned for cuts. Google Gemini then scores the whole transcript in windows of about 90 seconds, shortlists the strongest and cuts each moment so it opens on a complete thought, 30 to 60 seconds long unless you set other limits.'],
   ['Reframe, caption, export or post', 'Each clip is reframed to 9:16 so the speaker stays in the frame, captions are burned in from the word-level transcript and a hook line is drawn over the opening seconds. Download the MP4s, or post them to YouTube Shorts, TikTok and Instagram from the dashboard.'],
 ]
 
@@ -171,7 +171,7 @@ const ytClipFaq = [
   { q: 'Do I need a credit card to start?', a: 'No. You sign in with Google or an email link and the free minutes are there. A card is only asked for when you choose a paid plan.' },
   { q: 'How many clips does one YouTube video give?', a: 'It depends on the length and on how much of it stands alone. For anything longer than about 12 minutes the AI is asked for 6 to 12 clips, and it returns fewer rather than padding when the material does not hold them. You can pin an exact number from 1 to 15 in the advanced options.' },
   { q: 'How long can the YouTube video be?', a: `There is no fixed maximum on the link itself; the limit that matters is your minute balance on Cloud. On the free plan a source longer than your balance is clipped from the start up to what you have left (your first video is clipped whole up to ${FIRST_VIDEO_MINUTES} minutes). The minimum is 45 seconds of material. You can also pick just a stretch of a long video and pay only for that stretch.` },
-  { q: 'How long is each clip?', a: 'Between 15 and 60 seconds by default. In the advanced options you can set the minimum anywhere from 5 to 175 seconds and the maximum from 10 to 180 seconds, which covers the 3-minute ceiling of a YouTube Short.' },
+  { q: 'How long is each clip?', a: 'Between 30 and 60 seconds by default. In the advanced options you can set the minimum anywhere from 5 to 85 seconds and the maximum from 10 to 90 seconds, which covers the 3-minute ceiling of a YouTube Short.' },
   { q: 'What format are the clips?', a: 'MP4 files in 9:16, at least 1080 pixels wide (1080x1920 from a 1080p source), with captions and the hook burned in. Each clip also comes with an AI-written title and description.' },
   { q: 'Which YouTube links work?', a: 'Any link to one public video: watch pages, youtu.be links, Shorts, embeds and the replays of finished livestreams. Playlists, channels and search pages are refused because they are not one video; open the video and paste its own link. Private and members-only videos cannot be fetched.' },
   { q: 'Can I clip someone else\'s YouTube video?', a: 'Only with the rights to it: your own channel, a client\'s channel you manage, a guest\'s episode with their permission, or licensed and public-domain footage. Every job asks you to confirm that. Reposting other people\'s videos without permission is copyright infringement and the platforms remove it.' },
@@ -184,11 +184,11 @@ const youtubeClipMaker = () => common('/platforms/youtube', {
   // "clip a youtube video" and "youtube clipper" outweigh "youtube clip maker"
   // (which the H1 keeps); 58 characters with the brand.
   title: 'YouTube Clipper: Clip a YouTube Video With AI | OpenShorts',
-  description: `Clip a YouTube video from its link: AI picks the 15-60 s moments, reframes them to 9:16 and adds captions. First video free up to ${FIRST_VIDEO_MINUTES} min, watermarked.`,
+  description: `Clip a YouTube video from its link: AI picks the 30-60 s moments, reframes them to 9:16 and adds captions. First video free up to ${FIRST_VIDEO_MINUTES} min, watermarked.`,
   h1: 'YouTube clip maker: clip a YouTube video from its link',
   breadcrumb: [{ name: 'Platforms', path: '/platforms' }, { name: 'YouTube clip maker' }],
   updated: ANSWER_REVISED,
-  lede: `OpenShorts is an AI YouTube clip maker: paste a YouTube link and it picks the 3 to 15 strongest moments of 15 to 60 seconds, reframes each one to 9:16 around the person speaking and burns in captions, ready for Shorts, TikTok and Reels. ${ANSWER_PRICE}`,
+  lede: `OpenShorts is an AI YouTube clip maker: paste a YouTube link and it picks the 3 to 15 strongest moments of 30 to 60 seconds, reframes each one to 9:16 around the person speaking and burns in captions, ready for Shorts, TikTok and Reels. ${ANSWER_PRICE}`,
   tool: { entry: 'tool-paste-link', html: widget('https://www.youtube.com/watch?v=...', 'YouTube video link') },
   cta: {
     label: 'Clip a video',
@@ -197,7 +197,7 @@ const youtubeClipMaker = () => common('/platforms/youtube', {
   },
   related: ['/how-to/clip-a-youtube-video', '/platforms/youtube-shorts', '/auto-reframe', '/platforms/tiktok', '/alternatives/opus-clip'],
   tldr: [
-    'Paste the link of a 40-minute interview and OpenShorts reads all of it: a transcript with a timestamp on every word, a map of the camera cuts, and a score for each 90-second stretch. The ten best stretches go to a second pass that cuts the clips, and for a source that long it is asked for 6 to 12 of them, each 15 to 60 seconds, each opening on a sentence rather than halfway through one.',
+    'Paste the link of a 40-minute interview and OpenShorts reads all of it: a transcript with a timestamp on every word, a map of the camera cuts, and a score for each 90-second stretch. The ten best stretches go to a second pass that cuts the clips, and for a source that long it is asked for 6 to 12 of them, each 30 to 60 seconds, each opening on a sentence rather than halfway through one.',
     'Every clip comes back vertical, captioned and with a hook line over the first seconds, ready to post as a Short, a TikTok or a Reel. You never download the YouTube video or upload it again.',
   ],
   body: `
@@ -292,8 +292,8 @@ empty answer is accepted where a padded one would not be. The floor is
 enforced in code rather than left to the prompt, so a long video does not
 collapse to a single clip.</p>
 <p>Open <strong>advanced options</strong> to override any of it: an exact
-number of clips from 1 to 15, a minimum length from 5 to 175 seconds and a
-maximum from 10 to 180. And for a long video where you only care about one
+number of clips from 1 to 15, a minimum length from 5 to 85 seconds and a
+maximum from 10 to 90. And for a long video where you only care about one
 part, <strong>clip only part of it</strong> lets you pick the start and the end,
 so only that stretch is analysed and only that stretch counts against your
 minutes.</p>
@@ -351,14 +351,14 @@ const UGC_PRICE = (COMPARISON_ROWS.find((r) => r.feature.startsWith('AI UGC vide
 
 const shortsSteps = [
   ['Bring the long video', 'Paste a link to the long video (YouTube, or any of the other sites listed below) or upload the file. A podcast episode, a talk, a tutorial or a livestream replay all work; the source needs at least 45 seconds of material.'],
-  ['Let the AI pick and cut the Shorts', 'The video is transcribed word by word, Gemini scores every stretch of it for how well it would stand alone, and the best ones are cut on sentence boundaries, 15 to 60 seconds by default or up to 3 minutes if you raise the maximum.'],
+  ['Let the AI pick and cut the Shorts', 'The video is transcribed word by word, Gemini scores every stretch of it for how well it would stand alone, and the best ones are cut on sentence boundaries, 30 to 60 seconds by default or up to 90 seconds if you raise the maximum.'],
   ['Post them as Shorts', 'Each Short is reframed to 9:16, captioned, given a hook over the first seconds and a title. Publish it to your YouTube channel from the dashboard, schedule a week of them, or download the files.'],
 ]
 
 const shortsFaq = [
   { q: 'Is this YouTube Shorts maker free?', a: `Yes on two terms. OpenShorts Cloud clips your first video whole up to ${FIRST_VIDEO_MINUTES} minutes, then ${CLOUD.freeMinutes} minutes a month, with a watermark and no credit card; paid plans start at $${CLOUD.lowPrice}/month with no watermark. The self-hosted edition is free under MIT with no watermark and no cap.` },
   { q: 'Will my Shorts have a watermark?', a: 'On the hosted free plan, yes. A paid plan removes it from new Shorts and from the ones you already made. The self-hosted edition never adds one.' },
-  { q: 'How long can a YouTube Short be?', a: `Up to 3 minutes, in a vertical or square aspect ratio, according to YouTube's help pages (checked ${SPECS_CHECKED}). OpenShorts cuts 15 to 60 seconds by default; set the maximum up to 180 seconds in the advanced options when a longer Short suits the moment.` },
+  { q: 'How long can a YouTube Short be?', a: `Up to 3 minutes, in a vertical or square aspect ratio, according to YouTube's help pages (checked ${SPECS_CHECKED}). OpenShorts cuts 30 to 60 seconds by default; set the maximum up to 90 seconds in the advanced options when a longer Short suits the moment.` },
   { q: 'Can it post straight to my YouTube channel?', a: 'Yes. Connect the channel once in the dashboard and publish a Short with its title and description, or schedule a week of them. TikTok and Instagram can be posted to from the same screen.' },
   { q: 'Can it make Shorts from every new upload automatically?', a: 'Yes, with Autopilot on a paid plan. Every new video on your connected channel is clipped on its own, and if you turn on publishing the best Shorts are scheduled one a day at the hour you choose. It never touches your back catalogue and skips videos that are already Shorts.' },
   { q: 'How many Shorts does one video give?', a: 'For a video longer than about 12 minutes the AI is asked for 6 to 12, fewer when the material does not hold them. Shorter videos give fewer. You can set an exact number from 1 to 15.' },
@@ -376,7 +376,7 @@ const youtubeShortsMaker = () => common('/platforms/youtube-shorts', {
   h1: 'YouTube Shorts maker: AI Shorts from your long videos',
   breadcrumb: [{ name: 'Platforms', path: '/platforms' }, { name: 'YouTube Shorts maker' }],
   updated: ANSWER_REVISED,
-  lede: `OpenShorts is an AI YouTube Shorts maker: paste the link of a long video and it turns it into 3 to 15 Shorts automatically, picking moments of 15 to 60 seconds, reframing each to 9:16 around the person speaking and burning in captions and a hook. ${ANSWER_PRICE}`,
+  lede: `OpenShorts is an AI YouTube Shorts maker: paste the link of a long video and it turns it into 3 to 15 Shorts automatically, picking moments of 30 to 60 seconds, reframing each to 9:16 around the person speaking and burning in captions and a hook. ${ANSWER_PRICE}`,
   tool: { entry: 'tool-paste-link', html: widget('Paste a link to the long video', 'Long video link') },
   cta: {
     label: 'Make Shorts',
@@ -399,7 +399,7 @@ first second or two whether to keep watching. Each part of a Short that
 OpenShorts makes answers one of those constraints:</p>
 <ul>
 <li><strong>Aspect ratio.</strong> The horizontal source is reframed to 9:16 rather than letterboxed, so the Short fills the phone. A single speaker is face-tracked; two people talking are stacked; a screen recording keeps the screen readable. A source that is already vertical is passed through untouched.</li>
-<li><strong>Length.</strong> 15 to 60 seconds by default, because most moments that stand alone are that long. Raise the maximum to as much as 180 seconds in the advanced options when you clip a story that needs room.</li>
+<li><strong>Length.</strong> 30 to 60 seconds by default, because most moments that stand alone are that long. Raise the maximum to as much as 90 seconds in the advanced options when you clip a story that needs room.</li>
 <li><strong>The first seconds.</strong> A hook line, written from what is said in that clip, is drawn over the opening. Its height is chosen per clip: six frames are checked for faces and the text goes where it covers the least of anyone's face, inside the area the Shorts player does not cover.</li>
 <li><strong>Sound off.</strong> Captions are burned in from the word-level transcript, placed about 15% above the bottom edge so the title, channel name and buttons of the Shorts player do not sit on top of them.</li>
 <li><strong>The title.</strong> Each clip gets its own title and description, written for a Short rather than copied from the long video.</li>
@@ -522,7 +522,7 @@ ${sources([
 
 const tiktokSteps = [
   ['Paste the long video', 'A YouTube link is the usual start, but any public video link from the sites listed on this page works, a long TikTok included. Or upload the recording.'],
-  ['AI cuts the TikToks', 'Gemini reads the word-level transcript, ranks every stretch for how well it would hold a stranger, and cuts the best ones on sentence boundaries, 15 to 60 seconds each by default.'],
+  ['AI cuts the TikToks', 'Gemini reads the word-level transcript, ranks every stretch for how well it would hold a stranger, and cuts the best ones on sentence boundaries, 30 to 60 seconds each by default.'],
   ['Send them to TikTok', 'Each clip comes back 9:16 with captions and a hook. Send it to your TikTok account from the dashboard, where it lands as a draft for you to finish with a sound and hashtags, or download the MP4.'],
 ]
 
@@ -532,7 +532,7 @@ const tiktokFaq = [
   { q: 'Why does my clip show up as a draft on TikTok?', a: 'Because TikTok\'s API delivers videos sent from other apps to your TikTok inbox as drafts. You get a notification in the app, then add the caption, a sound and hashtags there and post it. The title and description written for the clip are not carried onto a TikTok draft, so you paste or write them in the app.' },
   { q: 'How do I turn a YouTube video into TikToks?', a: 'Paste the YouTube link above. The video is fetched, transcribed and cut into vertical clips with captions and hooks, which you can send to TikTok or download. You do not need to download the YouTube video first.' },
   { q: 'Can I clip a TikTok video or a TikTok LIVE?', a: 'A public TikTok video link works as a source if it has at least 45 seconds of material, which mostly means long uploads. A LIVE cannot be clipped while it is on air; if you saved the replay, upload that file.' },
-  { q: 'How long should a TikTok clip be?', a: 'The default here is 15 to 60 seconds, because that is how long most moments that stand alone run. TikTok accepts far longer uploads; raise the maximum up to 180 seconds in the advanced options for a story that needs it.' },
+  { q: 'How long should a TikTok clip be?', a: 'The default here is 30 to 60 seconds, because that is how long most moments that stand alone run. TikTok accepts far longer uploads; raise the maximum up to 90 seconds in the advanced options for a story that needs it.' },
   { q: 'How many TikToks does one video give?', a: 'A video longer than about 12 minutes is asked for 6 to 12 clips, and fewer come back when fewer moments stand alone. You can ask for an exact number from 1 to 15.' },
   { q: 'Can it make TikTok clips from a long video without me picking the moments?', a: 'Yes. The AI reads the whole transcript and picks the moments itself; you can override any of it afterwards in the clip editor, or mark one stretch with "clip only part of it" before the job starts so it only looks there.' },
   { q: 'Is it an AI TikTok generator?', a: `It is a clipper: every TikTok is cut from your own footage. For videos made from a script with no footage at all, the AI Shorts tab makes UGC-style videos with AI actors, from ${UGC_PRICE} a video.` },
@@ -553,7 +553,7 @@ const tiktokClipMaker = () => common('/platforms/tiktok', {
   },
   related: ['/platforms/instagram-reels', '/platforms/youtube-shorts', '/platforms/twitch', '/alternatives/klap'],
   tldr: [
-    'Take a 30-minute YouTube video that did well. Pasted here, it comes back as a stack of vertical clips, 6 to 12 of them for a source that long, each 15 to 60 seconds, captioned for the muted autoplay most TikToks start in and opened by a hook line written from what is said in that clip.',
+    'Take a 30-minute YouTube video that did well. Pasted here, it comes back as a stack of vertical clips, 6 to 12 of them for a source that long, each 30 to 60 seconds, captioned for the muted autoplay most TikToks start in and opened by a hook line written from what is said in that clip.',
     'Send them to your TikTok account from the dashboard and they wait in your TikTok inbox as drafts, where you add the sound, the hashtags and the caption the way TikTok rewards. Or download the files and post them however you like.',
   ],
   body: `
@@ -663,7 +663,7 @@ ${sources([
 
 const reelSteps = [
   ['Add the long video', 'Paste a public link (YouTube, Vimeo, a Facebook video or Live replay, an Instagram post, and the other sites listed below) or upload the recording: a podcast, a webinar, a talk, a class.'],
-  ['The AI picks the Reels', 'The recording is transcribed word by word and Gemini ranks every stretch of it for how well it would play on its own. The strongest are cut on sentence boundaries, 15 to 60 seconds each unless you set other limits.'],
+  ['The AI picks the Reels', 'The recording is transcribed word by word and Gemini ranks every stretch of it for how well it would play on its own. The strongest are cut on sentence boundaries, 30 to 60 seconds each unless you set other limits.'],
   ['Publish to Instagram or download', 'Each Reel comes back 9:16 with captions, a hook and a description written for Instagram. Publish it to your Instagram account as a Reel, schedule a week of them, or download the MP4 for Facebook.'],
 ]
 
@@ -673,7 +673,7 @@ const reelFaq = [
   { q: 'Is there a reels maker app to install?', a: 'No app store app: OpenShorts Cloud runs in the web browser and the self-hosted edition runs on your own machine with Docker. Either way the Reels you make are MP4 files you can post from the Instagram app, or publish to Instagram straight from the dashboard.' },
   { q: 'What size is an Instagram Reel made here?', a: 'Vertical 9:16, at least 1080 pixels wide: 1080x1920 from a 1080p source, with captions and the hook burned in. The guide to Instagram Reel dimensions covers the rest of the specs.' },
   { q: 'Does it work for Facebook Reels?', a: 'The clips are the right shape for Facebook Reels, but OpenShorts does not publish to Facebook. Download the MP4 and post it from the Facebook app or Meta Business Suite.' },
-  { q: 'How long can an Instagram Reel be?', a: 'Instagram raised the Reels limit to 3 minutes in January 2025. Clips here are 15 to 60 seconds by default; set the maximum up to 180 seconds in the advanced options for longer Reels.' },
+  { q: 'How long can an Instagram Reel be?', a: 'Instagram raised the Reels limit to 3 minutes in January 2025. Clips here are 30 to 60 seconds by default; set the maximum up to 90 seconds in the advanced options for longer Reels.' },
   { q: 'Will the captions be covered by the Instagram buttons?', a: 'They are placed about 15% above the bottom edge, which keeps them clear of the caption text and account name Instagram draws at the bottom of a Reel.' },
   { q: 'How many Reels does one video give?', a: 'A video longer than about 12 minutes is asked for 6 to 12 Reels, fewer when fewer moments stand alone. You can ask for an exact number from 1 to 15.' },
   { q: 'Can I make Reels from an Instagram Live or a Facebook Live?', a: 'From the replay, once it has ended: paste the link of a public Facebook Live replay, or upload the file of an Instagram Live you downloaded. Nothing is clipped while a broadcast is on air.' },
@@ -743,8 +743,8 @@ publish button that posts it to Instagram as a Reel, with the description
 written for Instagram (edit it first if you like), and
 <strong>schedule a week</strong> spreads a batch over the following days at
 the hour you pick. Instagram raised the Reels length limit to 3 minutes in
-January 2025, so you can raise the clip maximum to 180 seconds when a longer
-Reel suits the moment; the default of 15 to 60 seconds is where most moments
+January 2025; the clip maximum here goes up to 90 seconds when a longer
+Reel suits the moment; the default of 30 to 60 seconds is where most moments
 that stand alone end.</p>
 <p>The same screen posts to TikTok and YouTube Shorts, so one recording can
 fill all three. Posting is available on the free plan as well, with a daily
@@ -850,7 +850,7 @@ const twitchClipMaker = () => common('/platforms/twitch', {
   h1: 'Twitch clip maker: AI clips from your streams and VODs',
   breadcrumb: [{ name: 'Platforms', path: '/platforms' }, { name: 'Twitch clip maker' }],
   updated: ANSWER_REVISED,
-  lede: `OpenShorts is an AI tool that clips Twitch streams into TikToks, Shorts and Reels: paste a VOD link and it picks the moments that stand alone, cuts them into 15 to 60 second vertical clips with your facecam kept and captions burned in. ${ANSWER_PRICE} Prices of the other stream clippers are in the table further down.`,
+  lede: `OpenShorts is an AI tool that clips Twitch streams into TikToks, Shorts and Reels: paste a VOD link and it picks the moments that stand alone, cuts them into 30 to 60 second vertical clips with your facecam kept and captions burned in. ${ANSWER_PRICE} Prices of the other stream clippers are in the table further down.`,
   tool: { entry: 'tool-paste-link', html: widget('https://www.twitch.tv/videos/...', 'Twitch VOD link') },
   cta: {
     label: 'Clip a stream',
@@ -1013,7 +1013,7 @@ const SPEED_LINE = `${CPU_SPEED} on your own machine, while on OpenShorts Cloud 
 
 const kickSteps = [
   ['Copy the Kick VOD or clip link', 'On the streamer\'s Kick page open Videos and copy the link of the past stream, or copy the link of a Kick clip that runs 45 seconds or more. Paste it in the box. A bare channel link is the live channel, so the box asks for the recording.'],
-  ['AI picks the moments worth posting', 'The stream is transcribed word by word, Gemini ranks every stretch of it for how well it plays with no context, and the strongest are cut on sentence boundaries into clips of 15 to 60 seconds. A stream with almost no speech is watched by the model instead.'],
+  ['AI picks the moments worth posting', 'The stream is transcribed word by word, Gemini ranks every stretch of it for how well it plays with no context, and the strongest are cut on sentence boundaries into clips of 30 to 60 seconds. A stream with almost no speech is watched by the model instead.'],
   ['Vertical clips, ready to post', 'Each clip is reframed to 9:16 (facecam stacked under gameplay, IRL footage tracked and steadied), captioned and given a hook. Post to TikTok, YouTube Shorts and Instagram Reels, or download.'],
 ]
 
@@ -1161,7 +1161,7 @@ const reframeFaq = [
   { q: 'What does auto reframe mean?', a: 'Converting a horizontal video to a vertical (or other) aspect ratio by moving the crop to follow what matters in the shot, usually a face, instead of cutting a fixed slice out of the middle. Here it is one stage of turning a long video into vertical clips.' },
   { q: 'Is the auto reframe free?', a: `On the hosted free plan your first video is clipped whole up to ${FIRST_VIDEO_MINUTES} minutes, then ${CLOUD.freeMinutes} minutes a month, with a watermark and no credit card; paid plans start at $${CLOUD.lowPrice}/month with no watermark. The self-hosted edition is free under MIT. For a quick static crop of a short file, the free video to 9:16 converter runs in your browser with no account and no watermark.` },
   { q: 'How is it different from the free 9:16 converter?', a: 'The converter applies one fixed treatment to the whole file (crop at a position you choose, blurred background or black bars) and never looks at what is in the frame. Auto reframe tracks faces, decides a layout per scene and cuts the video into clips. Use the converter for a short clip you have already cut; use auto reframe for a long recording with people in it.' },
-  { q: 'Can it reframe a whole video into one vertical video?', a: 'No. It reframes the clips it cuts, each up to 180 seconds when you raise the maximum. To convert a whole short video in one piece with a fixed crop, use the free 9:16 converter, which takes up to 5 minutes in the browser.' },
+  { q: 'Can it reframe a whole video into one vertical video?', a: 'No. It reframes the clips it cuts, each up to 90 seconds when you raise the maximum. To convert a whole short video in one piece with a fixed crop, use the free 9:16 converter, which takes up to 5 minutes in the browser.' },
   { q: 'What happens with two people in the shot?', a: 'When both faces are visible in the same frame for at least half of the sampled frames, the scene is stacked: one person in each half of the vertical frame, with the captions on the seam between them. Shot and reverse shot (one person at a time) stays a single tracked crop, so nobody appears twice.' },
   { q: 'Does it work on screen recordings?', a: 'Yes. With the layout on auto or screencast, each shot is classified as screen, screen beside a presenter, or camera. A screen keeps its full width, cropped to the area being read; a presenter beside the screen is stacked under the content; a webcam floating over the screen is enlarged below it.' },
   { q: 'What if my video is already vertical?', a: 'It is passed through untouched. Every layout exists to win back width a crop throws away, and a vertical source has none to throw away.' },
@@ -1293,7 +1293,7 @@ beyond a single crop: Klap lists split-screen, screencast and gaming layouts,
 
 <h2>What it does not do</h2>
 <ul>
-<li><strong>It does not reframe a whole long video into one vertical file.</strong> It reframes the clips it cuts, each up to 180 seconds.</li>
+<li><strong>It does not reframe a whole long video into one vertical file.</strong> It reframes the clips it cuts, each up to 90 seconds.</li>
 <li><strong>It does not output square or 4:5.</strong> The target is 9:16.</li>
 <li><strong>It does not take sources under 45 seconds.</strong> For a short file, use the free converter.</li>
 <li><strong>It does not track objects or animals</strong> as subjects: tracking is for faces and people.</li>
@@ -1383,7 +1383,7 @@ hear the reading, the series title or the first point. The scoring is built
 for exactly that. The transcript is split into windows of about 90 seconds
 and Gemini scores every one on hook strength, emotional payload and how well it
 stands alone; the best go to a second pass that cuts each clip on sentence
-boundaries, 15 to 60 seconds long by default. In practice the passages that win
+boundaries, 30 to 60 seconds long by default. In practice the passages that win
 are a story told in full, one clear point stated plainly, a question put to the
 listener, or the line people would repeat on the way out. Long arguments that
 depend on the previous ten minutes tend not to, which is the right call for

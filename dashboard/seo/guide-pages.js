@@ -604,7 +604,7 @@ const HOWTO_FAQ = [
   },
   {
     q: 'How do I take a clip from a YouTube video for TikTok or Shorts?',
-    a: 'Cut the segment, then reframe it from 16:9 to 9:16 and add captions. You can do it by hand with an editor or ffmpeg, or paste the link into an AI clipper like OpenShorts, which picks 3 to 15 moments of 15 to 60 seconds, reframes them with face tracking and burns in word-level subtitles.',
+    a: 'Cut the segment, then reframe it from 16:9 to 9:16 and add captions. You can do it by hand with an editor or ffmpeg, or paste the link into an AI clipper like OpenShorts, which picks 3 to 15 moments of 30 to 60 seconds, reframes them with face tracking and burns in word-level subtitles.',
   },
   {
     q: 'How do I save a clip of a YouTube video?',
@@ -750,7 +750,7 @@ moments already cut, reframed and captioned.</p>
 <ol>
 <li>Paste the YouTube link (or upload the file) at openshorts.app, or in your own self-hosted copy.</li>
 <li>The video is transcribed with a timestamp for every word and scanned for scene cuts.</li>
-<li>Google Gemini scores the transcript and picks the 3 to 15 strongest moments, each 15 to 60 seconds, that make sense on their own.</li>
+<li>Google Gemini scores the transcript and picks the 3 to 15 strongest moments, each 30 to 60 seconds, that make sense on their own.</li>
 <li>Each moment is cut and reframed to 9:16: face tracking for one speaker, both people stacked for a two-person podcast, the screen above the presenter for a tutorial.</li>
 <li>Subtitles are burned in from the word-level transcript, with a hook line on the first seconds. Download the clips, or post them to YouTube Shorts, TikTok and Instagram Reels.</li>
 </ol>
@@ -1307,8 +1307,8 @@ ${nextStep(path, {
 steady flow of Shorts is finding the moments in your long videos that stand
 alone and cutting each one: reframed to 9:16, captioned, with a hook in the
 first seconds. OpenShorts reads the whole video, picks those moments and
-returns them as 1080 x 1920 Shorts, 15 to 60 seconds by default and up to 3
-minutes if you raise the maximum. It can publish them to your channel or
+returns them as 1080 x 1920 Shorts, 30 to 60 seconds by default and up to 90
+seconds if you raise the maximum. It can publish them to your channel or
 schedule a week of them. See <a href="/platforms/youtube-shorts">the YouTube
 Shorts maker</a> for the details.</p>`,
   title: 'Paste a YouTube link, get 9:16 Shorts',
@@ -1661,7 +1661,7 @@ strongest moments already cut, reframed and captioned. With OpenShorts:</p>
 <ol>
 <li>Paste the YouTube link, or upload the file.</li>
 <li>The video is transcribed word by word, and Gemini scores every stretch of it for how well it would stand alone.</li>
-<li>The best moments are cut on sentence boundaries, 15 to 60 seconds by default or up to 3 minutes if you raise the maximum.</li>
+<li>The best moments are cut on sentence boundaries, 30 to 60 seconds by default or up to 90 seconds if you raise the maximum.</li>
 <li>Each is reframed to 9:16: the speaker tracked, two people stacked, or a screen kept readable beside the presenter. Captions are burned in from the transcript and a hook is drawn over the first seconds.</li>
 <li>Publish them to your channel, schedule a week of them, or download the files.</li>
 </ol>

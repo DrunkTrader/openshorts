@@ -85,9 +85,9 @@ const SPECS_CHECKED = '28 October 2026'
 const CAPTIONS = 'Burned in about 15% of the frame height above the bottom edge, above the caption and music bar'
 const PLATFORM_SPECS = [
   ['YouTube Shorts', 'Destination', 'Up to 3 minutes', 'Vertical or square; clips are 9:16', CAPTIONS, 'Published to your channel, or scheduled'],
-  ['TikTok', 'Destination', 'Longer uploads accepted; clips here go up to 180 s', '9:16', CAPTIONS, 'Sent to your TikTok inbox as a draft, finished in the app'],
+  ['TikTok', 'Destination', 'Longer uploads accepted; clips here go up to 90 s', '9:16', CAPTIONS, 'Sent to your TikTok inbox as a draft, finished in the app'],
   ['Instagram Reels', 'Destination', 'Up to 3 minutes', '9:16', CAPTIONS, 'Published to Instagram, or scheduled'],
-  ['Facebook Reels', 'Destination', 'Clips up to 180 s', '9:16', CAPTIONS, 'Download the MP4 and post it yourself'],
+  ['Facebook Reels', 'Destination', 'Clips up to 90 s', '9:16', CAPTIONS, 'Download the MP4 and post it yourself'],
   ['YouTube', 'Source', 'Any public video; clipped from your minute balance', '16:9 in, 9:16 out', 'Word-level, from the transcript', 'n/a (one video link at a time)'],
   ['Twitch and Kick', 'Source', 'Hours-long VODs, clipped in parts', '16:9 in, facecam stacked under gameplay', 'Word-level, from the transcript', 'Not posted back; clips go to Shorts, TikTok or Reels'],
 ]
@@ -120,8 +120,8 @@ ${cardGrid(children)}
 <h2>Platform specs side by side</h2>
 <p class="checked">Platform limits checked ${esc(SPECS_CHECKED)} on each platform's help pages; sources are listed on each platform page.</p>
 ${specsTable()}
-<p>Clips are 15 to 60 seconds by default, because most moments that stand on
-their own run that long; the maximum can be raised to 180 seconds in the
+<p>Clips are 30 to 60 seconds by default, because most moments that stand on
+their own run that long; the maximum can be raised to 90 seconds in the
 advanced options. Every clip is at least 1080 pixels wide, so a 1080p source
 gives 1080x1920. Captions sit above the bottom strip where TikTok, Reels and
 Shorts draw the username, the description and the music ticker, so the exported

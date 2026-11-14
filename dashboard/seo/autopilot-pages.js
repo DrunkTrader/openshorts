@@ -70,7 +70,7 @@ const autoClip = () => ({
 <ol>
 <li><strong>Transcribe.</strong> The audio is transcribed with word-level timestamps, so every clip can start and end on a word.</li>
 <li><strong>Find the cuts.</strong> Scene detection marks where the picture changes.</li>
-<li><strong>Score the moments.</strong> Google Gemini reads the transcript and rates stretches of 15 to 60 seconds on whether they make sense alone and hold attention, then keeps the 3 to 15 best.</li>
+<li><strong>Score the moments.</strong> Google Gemini reads the transcript and rates stretches of 30 to 60 seconds on whether they make sense alone and hold attention, then keeps the 3 to 15 best.</li>
 <li><strong>Reframe to 9:16.</strong> Face tracking keeps the speaker in the frame; screen recordings and two-person shots get their own layouts.</li>
 <li><strong>Subtitle and title.</strong> Captions are burned in from the transcript and each clip gets a hook and a title.</li>
 </ol>
@@ -134,7 +134,7 @@ same automation yourself with the
 ${faqBlock([
   {
     q: 'What is auto clipping?',
-    a: 'Software that watches a long video, finds the moments that work on their own and cuts them into short vertical clips with subtitles, instead of you scrubbing the timeline by hand. OpenShorts returns 3 to 15 clips of 15 to 60 seconds per video.',
+    a: 'Software that watches a long video, finds the moments that work on their own and cuts them into short vertical clips with subtitles, instead of you scrubbing the timeline by hand. OpenShorts returns 3 to 15 clips of 30 to 60 seconds per video.',
   },
   {
     q: 'Can OpenShorts clip my new YouTube videos automatically?',
@@ -164,7 +164,7 @@ ${sources([
 ])}
 `,
   faq: [
-    { q: 'What is auto clipping?', a: 'Software that finds the moments of a long video that work on their own and cuts them into short vertical clips with subtitles. OpenShorts returns 3 to 15 clips of 15 to 60 seconds per video.' },
+    { q: 'What is auto clipping?', a: 'Software that finds the moments of a long video that work on their own and cuts them into short vertical clips with subtitles. OpenShorts returns 3 to 15 clips of 30 to 60 seconds per video.' },
     { q: 'Can OpenShorts clip my new YouTube videos automatically?', a: 'Yes. Autopilot checks your connected channel about once an hour and clips each new video: only videos published after you switch it on, at most one a day.' },
     { q: 'Does Autopilot post the clips for me?', a: 'Only if you turn on autopublish. Then it schedules the best 1 to 5 clips of each video one a day on TikTok, Instagram and YouTube Shorts.' },
     { q: 'Is automatic clipping free?', a: 'Clipping a pasted video is free for 20 minutes a month, or unlimited self-hosted. Autopilot is included in the paid plans from $12/month.' },
