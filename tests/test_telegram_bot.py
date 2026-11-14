@@ -1348,3 +1348,50 @@ def test_clips_unknown_or_unfinished_job(tmp_path):
     r.routes[f"GET /api/status/{JOB}"] = status("processing", [])
     run(r.bot.handle_update(msg("/clips")))
     assert "has no finished clips" in r.texts()[-1]
+
+
+KEEP = f"/api/jobs/{JOB}/clips/0/keep"
+
+
+def keep_calls(r, method):
+    return r.named(f"{method} {KEEP}")
+
+
+def test_confirm_keeps_the_file_until_a_day_after_the_run(tmp_path):
+    r = q_rig(tmp_path)
+    r.routes[f"POST {KEEP}"] = httpx.Response(200, json={})
+    when = NOW + timedelta(hours=2)
+    schedule_at(r, when)
+    (post,) = keep_calls(r, "POST")
+    assert json.loads(post.content) == {"until": (when + timedelta(days=1)).isoformat()}
+    assert "Could not protect" not in last_json(r, "editMessageText")["text"]
+
+
+def test_keep_failure_still_schedules_with_a_warning(tmp_path):
+    r = q_rig(tmp_path)
+    r.routes[f"POST {KEEP}"] = httpx.Response(500, json={"detail": f"boom {SECRET}"})
+    schedule_at(r, NOW + timedelta(hours=2))
+    assert rec_of(r)["state"] == "scheduled"
+    text = last_json(r, "editMessageText")["text"]
+    assert "could not protect the file from cleanup; it may be deleted after 24 h" in text.lower()
+    assert SECRET not in text
+
+
+def test_keep_dropped_on_cancel_upload_now_and_after_the_run(tmp_path):
+    r = q_rig(tmp_path)
+    schedule_at(r, NOW + timedelta(hours=1))
+    press(r, f"qc:{KEY}")                       # ❌ Cancel schedule
+    assert len(keep_calls(r, "DELETE")) == 1
+    schedule_at(r, NOW + timedelta(hours=1))
+    press(r, f"u:{KEY}", wait=True)             # ⏫ Upload now: dropped once it is done
+    assert len(keep_calls(r, "DELETE")) == 2
+    assert r.calls.index(r.named(HOOK)[0]) < r.calls.index(keep_calls(r, "DELETE")[1])
+    for answer in ({"ok": True, "youtube_url": "https://youtu.be/S"}, {"ok": False, "error": "quota"}):
+        r.routes[HOOK] = httpx.Response(200, json=answer)
+        rec_of(r)["state"] = ""
+        schedule_at(r, r.clock[0] + timedelta(hours=1))
+        r.clock[0] += timedelta(hours=1)
+        due(r)                                  # the scheduled run, uploaded or failed
+    assert len(keep_calls(r, "DELETE")) == 4
+    press(r, f"u:{KEY}", wait=True)             # a plain upload never scheduled: no DELETE
+    assert len(keep_calls(r, "DELETE")) == 4

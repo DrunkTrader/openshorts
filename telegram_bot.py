@@ -1126,11 +1126,17 @@ class IntakeBot:
             if (err := check_when(when, self.now())):
                 await self._edit(c, chat_id, mid, f"Not scheduled: {err}")
                 return err
-            rec.update(state="scheduled", at=when.isoformat())
+            rec.update(state="scheduled", at=when.isoformat(), keep=True)
             rec.pop("late", None)
             self._save()
             await self._show_clip(c, key, rec)
-            await self._edit(c, chat_id, mid, f"🗓 Scheduled clip {rec['i'] + 1} for {self._local(when)}.")
+            # A day of slack past the run: the API deletes job files after 24 h.
+            status, _ = await self._api(c, "POST", self._keep_path(key, rec),
+                                        json={"until": (when + timedelta(days=1)).isoformat()})
+            warn = ("" if status == 200 else "\n⚠️ Could not protect the file from cleanup; "
+                                             "it may be deleted after 24 h.")
+            await self._edit(c, chat_id, mid,
+                             f"🗓 Scheduled clip {rec['i'] + 1} for {self._local(when)}.{warn}")
             return "Scheduled."
         elif head in ("qc", "qx"):
             if rec.get("state") != "scheduled":
@@ -1140,11 +1146,22 @@ class IntakeBot:
             rec.pop("late", None)
             self._save()
             await self._show_clip(c, key, rec)
+            await self._unkeep(c, key, rec)
             if head == "qx":   # pressed in the /scheduled list: redraw it
                 text, markup = await self._scheduled_view(c, chat_id)
                 await self._edit(c, chat_id, mid, text, markup)
             return "Schedule cancelled."
         return None
+
+    @staticmethod
+    def _keep_path(key, rec):
+        return f"/api/jobs/{key.rsplit(':', 1)[0]}/clips/{rec['i']}/keep"
+
+    async def _unkeep(self, c, key, rec):
+        """Drop the cleanup protection a schedule set (best effort)."""
+        if rec.pop("keep", None):
+            self._save()
+            await self._api(c, "DELETE", self._keep_path(key, rec))
 
     async def _ask_schedule(self, c, chat_id, key, rec, when):
         """Send the Yes/No confirmation; returns the reason when ``when`` is refused."""
@@ -1261,6 +1278,7 @@ class IntakeBot:
                 rec.update(state="failed", error=self._safe(result.get("error") or "unknown error")[:200])
             self._save()
             await self._show_clip(c, key, rec)
+            await self._unkeep(c, key, rec)   # no automatic retry: the file is free to go
 
     # --- cancelling jobs ------------------------------------------------
     # callback_data "cj|cy|cn:<where>:<job id>": ask, yes, no. <where> is "s" for

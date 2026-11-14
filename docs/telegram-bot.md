@@ -159,6 +159,14 @@ private anyway). Times are in `TELEGRAM_TIMEZONE`.
   more than 2 minutes after its time says so). Schedules are in the state file,
   so they survive restarts; a clip that was `uploading` when the server stopped
   is not retried by itself (press Upload to YouTube if it did not arrive).
+- Job files are deleted `JOB_RETENTION_SECONDS` (24 h) after the job, so a
+  confirmed schedule also protects the clip's file: the bot calls
+  `POST /api/jobs/<job>/clips/<index>/keep` with `until` = scheduled time + 1
+  day, and `DELETE` on the same path when the schedule is cancelled or the
+  upload has run (uploaded or failed, scheduled or ⏫ Upload now). If the keep
+  call fails the clip is still scheduled and the confirmation says "could not
+  protect the file from cleanup; it may be deleted after 24 h". What a keep
+  does to the job directory: `docs/architecture/jobs-and-deploys.md`.
 
 The webhook contract (fixed with the n8n workflow):
 
@@ -190,13 +198,14 @@ atomically:
   "job_settings": {"<job id>": {settings}},          # last 200
   "clips": {"<job id>:<index>": {"chat", "msg", "kind", "i", "title", "link",
                                  "state", "at", "late", "youtube_url", "drive_link",
-                                 "error"}}  # last 500 (scheduled ones are never dropped)
+                                 "error", "keep"}}  # last 500 (scheduled ones are never dropped)
 }
 ```
 
 A clip's `state` is `""`, `scheduled`, `uploading`, `uploaded`, `failed` or
 `skipped`; `at` is the scheduled time (ISO 8601, UTC) while it is `scheduled`;
-`late` is the "ran late" note.
+`late` is the "ran late" note; `keep` is set while the bot holds a cleanup
+keep for the clip.
 
 `settings` is `{"cap", "lay", "fmt", "hook", "n", "len", "priv", "spl", "pos",
 "rat", "aud", "off", "src"}`; `src` is `{"id", "name"}` of a library item or
