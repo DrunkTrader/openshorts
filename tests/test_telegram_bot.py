@@ -179,6 +179,7 @@ def _every_button(bot, job_id):
     s_on = {**s, "spl": "on", "src": {"id": "f" * 32, "name": "é" * 64}}
     boards += [bot.split_keyboard(s_on), bot.split_keyboard(s), bot.source_keyboard(),
                bot.pick_keyboard(long_items), bot.library_keyboard(long_items), bot.panel_keyboard(s_on)]
+    boards += [bot.cancel_keyboard(job_id, w) for w in "sl"] + [bot.confirm_keyboard(job_id, w) for w in "sl"]
     return [b for board in boards for row in board for b in row]
 
 
@@ -943,3 +944,102 @@ def test_start_with_split_remembers_it_per_job(rig):
     assert form(rig.named("POST /api/process")[0])["output_format"] == "vertical"
     js = rig.bot.data["job_settings"]["j-split"]
     assert js["spl"] == "on" and js["src"]["id"] == LIB_ID and js["pos"] == "top"
+
+
+# --- cancelling jobs -------------------------------------------------------------
+CJ = "0123abcd-1111-2222-3333-444455556666"
+
+
+def test_queued_message_has_cancel_and_confirmation_flow(rig):
+    rig.routes["POST /api/process"] = httpx.Response(200, json={"job_id": CJ})
+    run(rig.bot.handle_update(msg("https://youtu.be/abc")))
+    press(rig, "go")
+    queued = last_json(rig, "sendMessage")
+    assert queued["text"] == "Queued job 0123abcd"
+    assert kb_datas(queued["reply_markup"]["inline_keyboard"]) == [f"cj:s:{CJ}"]
+    press(rig, f"cj:s:{CJ}")
+    assert kb_datas(last_json(rig, "editMessageReplyMarkup")["reply_markup"]["inline_keyboard"]) == [
+        f"cy:s:{CJ}", f"cn:s:{CJ}"]
+    press(rig, f"cn:s:{CJ}")
+    assert kb_datas(last_json(rig, "editMessageReplyMarkup")["reply_markup"]["inline_keyboard"]) == [
+        f"cj:s:{CJ}"]
+    assert rig.named(f"POST /api/jobs/{CJ}/cancel") == []
+    rig.routes[f"POST /api/jobs/{CJ}/cancel"] = httpx.Response(200, json={"job_id": CJ, "status": "cancelled"})
+    press(rig, f"cy:s:{CJ}")
+    assert len(rig.named(f"POST /api/jobs/{CJ}/cancel")) == 1
+    ed = last_json(rig, "editMessageText")
+    assert ed["text"] == "Job 0123abcd: cancelled" and ed["reply_markup"]["inline_keyboard"] == []
+    assert last_json(rig, "answerCallbackQuery")["text"] == "Cancelled."
+
+
+def test_cancel_refused_says_why(rig):
+    rig.routes[f"POST /api/jobs/{CJ}/cancel"] = httpx.Response(
+        409, json={"detail": "This job is already completed: nothing to cancel."})
+    press(rig, f"cy:s:{CJ}")
+    assert "already completed" in last_json(rig, "answerCallbackQuery")["text"]
+    press(rig, "cy:s:../../api/x", "cy:q:" + CJ)
+    assert len([c for c in rig.calls if c.url.path.endswith("/cancel")]) == 1
+
+
+def test_tracking_keeps_cancel_button_then_stops_on_cancel_without_clips(rig):
+    seq = iter([status("queued"), status("processing"), status("cancelled"),
+                status("completed", [{"video_url": "/videos/x/a.mp4"}])])
+    rig.routes[f"GET /api/status/{CJ}"] = lambda r: next(seq)
+    run(rig.bot.track(CHAT, CJ, 7))
+    edits = [json.loads(c.content) for c in rig.named("editMessageText")]
+    assert [e["text"] for e in edits] == ["Job 0123abcd: processing", "Job 0123abcd: cancelled"]
+    assert kb_datas(edits[0]["reply_markup"]["inline_keyboard"]) == [f"cj:s:{CJ}"]
+    assert edits[1]["reply_markup"]["inline_keyboard"] == []
+    assert len(rig.named(f"GET /api/status/{CJ}")) == 3   # polling stopped
+    assert rig.named("sendVideo") == [] and rig.texts() == []
+
+
+def test_done_message_drops_the_cancel_button(rig):
+    rig.routes[f"GET /api/status/{CJ}"] = status("completed", [])
+    run(rig.bot.track(CHAT, CJ, 7))
+    assert last_json(rig, "editMessageText")["reply_markup"]["inline_keyboard"] == []
+
+
+JOBS = {"jobs": [
+    {"job_id": CJ, "status": "processing", "stage": "Transcribing audio", "source": "https://youtu.be/a",
+     "position": None, "started_at": 1.0},
+    {"job_id": "9999ffff-aaaa", "status": "queued", "position": 2, "source": "talk.mp4", "stage": "x"},
+    {"job_id": "8888eeee-bbbb", "status": "processing", "stage": "reading /srv/app/output/x.log"}]}
+
+
+def test_jobs_lists_active_with_cancel_and_refreshes_after(rig):
+    rig.routes["GET /api/jobs/active"] = httpx.Response(200, json=JOBS)
+    run(rig.bot.handle_update(msg("/jobs")))
+    out = last_json(rig, "sendMessage")
+    assert out["text"].splitlines() == [
+        "Active jobs:",
+        "1. 0123abcd processing: Transcribing audio https://youtu.be/a",
+        "2. 9999ffff queued, #2 in line talk.mp4",
+        "3. 8888eeee processing"]   # a stage with a path is not shown
+    assert kb_datas(out["reply_markup"]["inline_keyboard"]) == [
+        f"cj:l:{CJ}", "cj:l:9999ffff-aaaa", "cj:l:8888eeee-bbbb"]
+    press(rig, "cj:l:9999ffff-aaaa")
+    assert kb_datas(last_json(rig, "editMessageReplyMarkup")["reply_markup"]["inline_keyboard"]) == [
+        "cy:l:9999ffff-aaaa", "cn:l:9999ffff-aaaa"]
+    rig.routes["POST /api/jobs/9999ffff-aaaa/cancel"] = httpx.Response(200, json={})
+    rig.routes["GET /api/jobs/active"] = httpx.Response(200, json={"jobs": JOBS["jobs"][:1]})
+    press(rig, "cy:l:9999ffff-aaaa")
+    ed = last_json(rig, "editMessageText")
+    assert "9999ffff" not in ed["text"] and "0123abcd" in ed["text"]
+    assert kb_datas(ed["reply_markup"]["inline_keyboard"]) == [f"cj:l:{CJ}"]
+    rig.routes["GET /api/jobs/active"] = httpx.Response(200, json={"jobs": []})
+    run(rig.bot.handle_update(msg("/jobs")))
+    assert rig.texts()[-1] == "No jobs queued or running."
+
+
+def test_help_names_both_cancels(rig):
+    run(rig.bot.handle_update(msg("/help")))
+    assert "/jobs" in rig.texts()[-1] and "/cancel <id> - cancel a scheduled post" in rig.texts()[-1]
+
+
+def test_cancel_callbacks_and_jobs_from_unlisted_sender_are_silent(rig):
+    run(rig.bot.handle_update(msg("/jobs", user=999)))
+    for data in (f"cj:s:{CJ}", f"cy:s:{CJ}", f"cn:l:{CJ}", f"cy:l:{CJ}"):
+        run(rig.bot.handle_update(cb(data, user=999)))
+        run(rig.bot.handle_update(cb(data, chat=999)))
+    assert rig.calls == []

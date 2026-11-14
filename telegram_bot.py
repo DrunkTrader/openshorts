@@ -44,8 +44,9 @@ HELP = (
     "/preset_default <name> - the preset new panels start from\n"
     "/schedule <job> <clip#> <platforms> <YYYY-MM-DD HH:MM> - schedule a clip "
     "(platforms: tiktok,instagram,youtube; job is the short id from Queued)\n"
+    "/jobs - queued and running jobs, each with a 🛑 cancel button\n"
     "/scheduled - list scheduled posts\n"
-    "/cancel <id> - cancel a scheduled post\n"
+    "/cancel <id> - cancel a scheduled post (to cancel a job, use /jobs or its 🛑 button)\n"
     "/help - this text"
 )
 NO_UPLOAD = ("\n\nUpload to YouTube is off: N8N_UPLOAD_WEBHOOK_URL is not set on the server, "
@@ -77,6 +78,7 @@ NAME_BYTES = 32   # preset names ride in callback_data ("l:<name>", 64-byte cap)
 TITLE_CHARS = 100
 MAX_OFFSET = 36000   # slot_split.MAX_OFFSET_SECONDS
 _ID_RE = re.compile(r"^[0-9a-f]{32}$")   # a library item id
+_JOB_RE = re.compile(r"^[A-Za-z0-9-]{1,48}$")
 
 
 def parse_offset(text) -> Optional[str]:
@@ -366,7 +368,7 @@ class IntakeBot:
                   "/cancel": self._cancel, "/presets": self._presets,
                   "/preset_delete": self._preset_delete,
                   "/preset_default": self._preset_default,
-                  "/library": self._library}.get(name)
+                  "/library": self._library, "/jobs": self._jobs}.get(name)
             if fn:
                 return await fn(c, chat_id, rest)
             return await self._say(c, chat_id, self._help())
@@ -518,6 +520,8 @@ class IntakeBot:
             return await self._confirm_overwrite(c, chat_id, mid, arg == "y")
         if head == "lx":
             return await self._library_delete(c, chat_id, mid, arg)
+        if head in ("cj", "cy", "cn"):
+            return await self._job_cancel(c, chat_id, mid, head, arg)
         panel = self._panels(chat_id).get(str(mid))
         if panel is None:
             return "This panel has expired. Send the link again."
@@ -825,7 +829,7 @@ class IntakeBot:
             return await self._say(c, chat_id, f"Could not queue it: {reason}")
         self.data["job_settings"][job_id] = dict(settings)
         self._remember(chat_id, job_id)
-        mid = await self._say(c, chat_id, f"Queued job {job_id[:8]}")
+        mid = await self._say(c, chat_id, f"Queued job {job_id[:8]}", self.cancel_keyboard(job_id))
         self._spawn(self.track(chat_id, job_id, mid))
 
     # --- progress and delivery -----------------------------------------
@@ -846,9 +850,12 @@ class IntakeBot:
                     continue
                 if st != last and st in ("queued", "processing"):
                     last, interval = st, 15.0
-                    msg_id = await self._edit(c, chat_id, msg_id, f"Job {short}: {st}")
+                    msg_id = await self._edit(c, chat_id, msg_id, f"Job {short}: {st}",
+                                              self.cancel_keyboard(job_id))
                 else:
                     interval = min(60.0, interval * 1.5)
+                if st == "cancelled":
+                    return await self._edit(c, chat_id, msg_id, f"Job {short}: cancelled")
                 if st == "completed":
                     clips = (body.get("result") or {}).get("clips") or []
                     await self._edit(c, chat_id, msg_id, f"Job {short}: done, {len(clips)} clips")
@@ -1070,6 +1077,71 @@ class IntakeBot:
                 rec.update(state="failed", error=self._safe(result.get("error") or "unknown error")[:200])
             self._save()
             await self._show_clip(c, key, rec)
+
+    # --- cancelling jobs ------------------------------------------------
+    # callback_data "cj|cy|cn:<where>:<job id>": ask, yes, no. <where> is "s" for
+    # the job's status message, "l" for the /jobs list (redrawn after).
+    @staticmethod
+    def cancel_keyboard(job_id, where="s"):
+        return [[_btn("🛑 Cancel job", f"cj:{where}:{job_id}")]]
+
+    @staticmethod
+    def confirm_keyboard(job_id, where):
+        return [[_btn("Yes, cancel", f"cy:{where}:{job_id}"), _btn("No", f"cn:{where}:{job_id}")]]
+
+    async def _jobs_view(self, c):
+        status, body = await self._api(c, "GET", "/api/jobs/active")
+        if status != 200:
+            reason = "OpenShorts is not reachable" if status == 0 else self._detail(body)
+            return f"Could not list jobs: {reason}", None
+        rows = [j for j in body.get("jobs") or [] if isinstance(j, dict)
+                and _JOB_RE.match(str(j.get("job_id")))]
+        if not rows:
+            return "No jobs queued or running.", None
+        lines = []
+        for n, j in enumerate(rows):
+            jid, st = j["job_id"], j.get("status")
+            if st == "queued":
+                what = f"queued, #{j['position']} in line" if j.get("position") else "queued"
+            else:
+                stage = str(j.get("stage") or "").strip()
+                # Self-host logs are raw: a line with a path is not shown (as in _failure).
+                what = f"processing: {stage[:120]}" if stage and "/" not in stage and "\\" not in stage \
+                    else "processing"
+            src = f" {str(j.get('source'))[:80]}" if j.get("source") else ""
+            lines.append(f"{n + 1}. {jid[:8]} {what}{src}")
+        markup = [[_btn(f"🛑 Cancel {j['job_id'][:8]}", f"cj:l:{j['job_id']}")] for j in rows]
+        return "Active jobs:\n" + "\n".join(lines), markup
+
+    async def _jobs(self, c, chat_id, rest):
+        text, markup = await self._jobs_view(c)
+        await self._say(c, chat_id, text, markup)
+
+    async def _job_cancel(self, c, chat_id, mid, head, arg):
+        where, _, job_id = arg.partition(":")
+        if where not in ("s", "l") or not _JOB_RE.match(job_id):
+            return None
+        if head == "cj":
+            await self._keys(c, chat_id, mid, self.confirm_keyboard(job_id, where))
+            return "Cancel this job?"
+        if head == "cn":
+            if where == "l":
+                text, markup = await self._jobs_view(c)
+                await self._edit(c, chat_id, mid, text, markup)
+            else:
+                await self._keys(c, chat_id, mid, self.cancel_keyboard(job_id))
+            return "Kept."
+        status, body = await self._api(c, "POST", f"/api/jobs/{job_id}/cancel")
+        if status == 200:
+            if where == "l":
+                text, markup = await self._jobs_view(c)
+                await self._edit(c, chat_id, mid, text, markup)
+            else:
+                await self._edit(c, chat_id, mid, f"Job {job_id[:8]}: cancelled")
+            return "Cancelled."
+        if where == "s":
+            await self._keys(c, chat_id, mid, [])
+        return "OpenShorts is not reachable." if status == 0 else self._detail(body)[:150]
 
     # --- scheduling -----------------------------------------------------
     def _need_profile(self):
