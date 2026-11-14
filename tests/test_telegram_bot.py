@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qs
 
 import httpx
 import pytest
@@ -84,24 +85,117 @@ def test_unlisted_chat_gets_no_reply_and_no_api_call(rig):
     assert rig.bot.ignored == 2
 
 
-def test_url_message_queues_job_via_api_process(rig):
-    rig.routes["POST /api/process"] = httpx.Response(200, json={"job_id": "abcdef12-3456", "status": "queued"})
+def cb(data, chat=CHAT, user=CHAT, mid=7):
+    return {"update_id": 2, "callback_query": {
+        "id": "q1", "from": {"id": user}, "data": data,
+        "message": {"message_id": mid, "chat": {"id": chat}}}}
 
+
+def form(req):
+    return {k: v[0] for k, v in parse_qs(req.content.decode()).items()}
+
+
+def last_json(rig, method):
+    return json.loads(rig.named(method)[-1].content)
+
+
+def press(rig, *datas):
     async def go():
-        await rig.bot.handle_update(msg("watch this https://youtu.be/abc, please"))
+        for d in datas:
+            await rig.bot.handle_update(cb(d))
         for t in list(rig.bot._tasks):
             t.cancel()
     run(go())
-    body = json.loads(rig.named("POST /api/process")[0].content)
-    assert body == {"url": "https://youtu.be/abc", "acknowledged": True}
-    assert "Queued job abcdef12" in rig.texts()[0]
+
+
+def test_url_message_opens_panel_and_start_queues_job(rig):
+    rig.routes["POST /api/process"] = httpx.Response(200, json={"job_id": "abcdef12-3456", "status": "queued"})
+    run(rig.bot.handle_update(msg("watch this https://youtu.be/abc, please")))
+    assert rig.named("POST /api/process") == []  # nothing queued before Start
+    panel = last_json(rig, "sendMessage")
+    assert "https://youtu.be/abc" in panel["text"] and "Captions: default" in panel["text"]
+    press(rig, "go")
+    body = form(rig.named("POST /api/process")[0])
+    assert body == {"url": "https://youtu.be/abc", "acknowledged": "true", "output_format": "vertical",
+                    "layouts": "auto", "clip_min_seconds": "30", "clip_max_seconds": "60",
+                    "captions": "default", "auto_hook": "true", "auto_hook_style": "pill"}
+    assert "Queued job abcdef12" in rig.texts()[-1]
     assert rig.bot.jobs[str(CHAT)] == ["abcdef12-3456"]
+    assert rig.bot.data["job_settings"]["abcdef12-3456"]["priv"] == "private"
+    assert rig.bot.data["panels"][str(CHAT)] == {}
+
+
+def test_start_sends_exactly_the_chosen_fields(rig):
+    rig.routes["POST /api/process"] = httpx.Response(200, json={"job_id": "j1"})
+    run(rig.bot.handle_update(msg("https://youtu.be/abc")))
+    press(rig, "s:cap:off", "s:lay:split", "s:fmt:square", "s:hook:off", "s:n:5",
+          "s:len:60-90", "s:priv:public", "go")
+    assert form(rig.named("POST /api/process")[0]) == {
+        "url": "https://youtu.be/abc", "acknowledged": "true", "output_format": "square",
+        "layouts": "split", "clip_min_seconds": "60", "clip_max_seconds": "90",
+        "captions": "false", "auto_hook": "false", "target_clips": "5"}
+    assert rig.bot.data["job_settings"]["j1"]["priv"] == "public"
+
+
+def test_button_toggle_edits_panel_in_place(rig):
+    run(rig.bot.handle_update(msg("https://youtu.be/abc")))
+    press(rig, "m:cap")
+    sub = last_json(rig, "editMessageReplyMarkup")
+    assert sub["message_id"] == 7
+    labels = [b["text"] for row in sub["reply_markup"]["inline_keyboard"] for b in row]
+    assert "✓ default" in labels and "hormozi" in labels and "off" in labels
+    press(rig, "s:cap:hormozi")
+    ed = last_json(rig, "editMessageText")
+    assert ed["message_id"] == 7 and "Captions: hormozi" in ed["text"]
+    assert any(b["text"] == "Captions: hormozi" for row in ed["reply_markup"]["inline_keyboard"] for b in row)
+    press(rig, "s:cap:bogus")  # not an offered value: ignored
+    assert rig.bot.data["panels"][str(CHAT)]["7"]["s"]["cap"] == "hormozi"
+    assert len(rig.named("answerCallbackQuery")) == 3
+    press(rig, "x")
+    assert last_json(rig, "editMessageText")["text"] == "Cancelled."
+    assert rig.bot.data["panels"][str(CHAT)] == {}
+
+
+def test_callbacks_from_unlisted_chat_or_user_are_silent(rig):
+    run(rig.bot.handle_update(msg("https://youtu.be/abc")))
+    rig.calls.clear()
+    run(rig.bot.handle_update(cb("s:cap:off", chat=999, user=CHAT)))
+    run(rig.bot.handle_update(cb("s:cap:off", chat=CHAT, user=999)))
+    run(rig.bot.handle_update(cb("go", chat=CHAT, user=999)))
+    assert rig.calls == []
+    assert rig.bot.data["panels"][str(CHAT)]["7"]["s"]["cap"] == "default"
+
+
+def _every_button(bot, job_id):
+    s = dict(tb.DEFAULTS)
+    boards = [bot.panel_keyboard(s), bot.presets_keyboard(CHAT),
+              bot.clip_keyboard(job_id, 99, {"state": ""}),
+              [[tb._btn("y", "ow:y"), tb._btn("n", "ow:n")]]]
+    boards += [bot.option_keyboard(s, k) for k in tb.OPTIONS]
+    return [b for board in boards for row in board for b in row]
+
+
+def test_callback_data_fits_64_bytes(tmp_path):
+    r = Rig(tmp_path, n8n_url="http://n8n.local/hook", n8n_secret="S")
+    r.bot._presets_of(CHAT)[tb.preset_name("é" * 40)] = dict(tb.DEFAULTS)
+    r.bot._presets_of(CHAT)[tb.preset_name("x" * 80)] = dict(tb.DEFAULTS)
+    buttons = _every_button(r.bot, "0123456789abcdef0123456789abcdef0123")
+    assert len(buttons) > 40
+    for b in buttons:
+        assert len(b["callback_data"].encode()) <= 64, b
 
 
 def test_api_refusal_is_reported(rig):
     rig.routes["POST /api/process"] = httpx.Response(400, json={"detail": "URL not allowed"})
     run(rig.bot.handle_update(msg("https://10.0.0.1/x")))
-    assert "URL not allowed" in rig.texts()[0]
+    press(rig, "go")
+    assert "URL not allowed" in rig.texts()[-1]
+
+
+def test_expired_panel_says_so(rig):
+    press(rig, "go")
+    assert "expired" in last_json(rig, "answerCallbackQuery")["text"]
+    assert rig.named("POST /api/process") == []
 
 
 def test_non_url_text_gets_help_not_job(rig):
@@ -128,15 +222,13 @@ def test_video_file_posts_multipart(rig, monkeypatch):
     rig.routes["getFile"] = ok({"file_path": "videos/f.mp4"})
     rig.routes["GET /file/bot" + TOKEN + "/videos/f.mp4"] = httpx.Response(200, content=b"x" * 100)
     rig.routes["POST /api/process"] = httpx.Response(200, json={"job_id": "j" * 12})
-
-    async def go():
-        await rig.bot.handle_update(msg(video={"file_id": "f", "file_size": 100, "file_name": "a.mp4"}))
-        for t in list(rig.bot._tasks):
-            t.cancel()
-    run(go())
+    run(rig.bot.handle_update(msg(video={"file_id": "f", "file_size": 100, "file_name": "a.mp4"})))
+    assert rig.named("getFile") == [] and "a.mp4" in rig.texts()[0]  # panel first
+    press(rig, "s:fmt:horizontal", "go")
     req = rig.named("POST /api/process")[0]
     assert req.headers["content-type"].startswith("multipart/form-data")
     assert b'name="file"' in req.content and b"acknowledged" in req.content
+    assert b'name="output_format"\r\n\r\nhorizontal' in req.content
     assert made and not os.path.exists(made[0])
 
 
