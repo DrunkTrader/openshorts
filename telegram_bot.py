@@ -45,6 +45,7 @@ HELP = (
     "/schedule <job> <clip#> <platforms> <YYYY-MM-DD HH:MM> - schedule a clip "
     "(platforms: tiktok,instagram,youtube; job is the short id from Queued)\n"
     "/jobs - queued and running jobs, each with a 🛑 cancel button\n"
+    "/clips [job] - resend a finished job's clips with their buttons (latest job if omitted)\n"
     "🗓 Schedule upload (under each clip) - send it to YouTube later; times are in "
     "TELEGRAM_TIMEZONE\n"
     "/scheduled - list scheduled YouTube uploads (each with ❌ cancel) and Upload-Post posts\n"
@@ -405,7 +406,8 @@ class IntakeBot:
                   "/cancel": self._cancel, "/presets": self._presets,
                   "/preset_delete": self._preset_delete,
                   "/preset_default": self._preset_default,
-                  "/library": self._library, "/jobs": self._jobs}.get(name)
+                  "/library": self._library, "/jobs": self._jobs,
+                  "/clips": self._clips}.get(name)
             if fn:
                 return await fn(c, chat_id, rest)
             return await self._say(c, chat_id, self._help())
@@ -1298,6 +1300,34 @@ class IntakeBot:
     async def _jobs(self, c, chat_id, rest):
         text, markup = await self._jobs_view(c)
         await self._say(c, chat_id, text, markup)
+
+    async def _clips(self, c, chat_id, rest):
+        """Resend a finished job's clips with live buttons (latest job by default)."""
+        short = (rest or "").strip()
+        recent = self.jobs.get(str(chat_id), [])
+        job_id = self._resolve(chat_id, short) if short else (recent[-1] if recent else None)
+        if not job_id:
+            return await self._say(c, chat_id, "No such job. Use the short id from its Queued message.")
+        status, body = await self._api(c, "GET", f"/api/status/{job_id}")
+        done = status == 200 and body.get("status") == "completed"
+        clips = ((body.get("result") or {}).get("clips") or []) if done else []
+        if not clips:
+            return await self._say(c, chat_id, f"Job {job_id[:8]} has no finished clips.")
+        for i, clip in enumerate(clips):
+            rec = self.data["clips"].get(f"{job_id}:{i}")
+            if rec is None:
+                await self._deliver(c, chat_id, i, clip, job_id)
+                continue
+            # Keep the record (edited title, schedule, upload state); only the message is new.
+            markup = self.clip_keyboard(job_id, i, rec)
+            mid = await self._send_file(c, chat_id, clip, self.clip_text(rec), markup) if self.send_files else None
+            rec["kind"] = "caption"
+            if mid is None:
+                rec["kind"] = "text"
+                mid = await self._say(c, chat_id, self.clip_text(rec), markup)
+            if mid is not None:
+                rec["msg"] = mid
+                self._save()
 
     async def _job_cancel(self, c, chat_id, mid, head, arg):
         where, _, job_id = arg.partition(":")

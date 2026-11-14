@@ -1321,3 +1321,30 @@ def test_schedule_callbacks_from_unlisted_sender_are_silent(tmp_path):
     run(r.bot.handle_update(msg("/scheduled", user=999)))
     assert r.calls == [] and rec_of(r)["state"] == ""
     assert str(CHAT) not in r.bot.data["awaiting"]
+
+
+def test_clips_resends_latest_job_with_buttons_and_keeps_state(tmp_path):
+    r = up_rig(tmp_path)
+    r.bot.jobs[str(CHAT)] = [JOB]
+    run(r.bot.handle_update(msg("/clips")))
+    rec = r.bot.data["clips"][f"{JOB}:0"]
+    first_msg = rec["msg"]
+    datas = kb_datas(r.bot.clip_keyboard(JOB, 0, rec))
+    assert any(d.startswith("u:") for d in datas) and any(d.startswith("q:") for d in datas)
+    # An edited title and a schedule survive a resend; only the message is new.
+    rec.update(title="My title", state="scheduled", at="2026-11-20T12:30:00+00:00")
+    run(r.bot.handle_update(msg("/clips " + JOB[:8])))
+    rec2 = r.bot.data["clips"][f"{JOB}:0"]
+    assert rec2["title"] == "My title" and rec2["state"] == "scheduled"
+    assert rec2["msg"] is not None
+    assert any(d.startswith("qc:") for d in kb_datas(r.bot.clip_keyboard(JOB, 0, rec2)))
+
+
+def test_clips_unknown_or_unfinished_job(tmp_path):
+    r = up_rig(tmp_path)
+    run(r.bot.handle_update(msg("/clips nope")))
+    assert r.texts()[-1].startswith("No such job")
+    r.bot.jobs[str(CHAT)] = [JOB]
+    r.routes[f"GET /api/status/{JOB}"] = status("processing", [])
+    run(r.bot.handle_update(msg("/clips")))
+    assert "has no finished clips" in r.texts()[-1]
