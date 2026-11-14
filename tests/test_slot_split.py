@@ -162,8 +162,9 @@ def test_upload_graph_is_unreadable_by_the_gpu_renderer():
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")
-@pytest.mark.parametrize("ratio", ["50/50", "60/40", "40/60"])
-def test_ffmpeg_render_loops_a_short_upload(tmp_path, ratio):
+@pytest.mark.parametrize("ratio,audio", [("50/50", "source"), ("60/40", "mix"),
+                                         ("40/60", "upload")])
+def test_ffmpeg_render_loops_a_short_upload(tmp_path, ratio, audio):
     def make(name, seconds, size, tone):
         path = str(tmp_path / name)
         subprocess.run(
@@ -179,7 +180,7 @@ def test_ffmpeg_render_loops_a_short_upload(tmp_path, ratio):
     spec = slot_split.parse_slots({
         "top": {"kind": "source"},
         "bottom": {"kind": "upload", "upload_id": UP, "offset_s": 0.5},
-        "ratio": ratio, "audio": "source"})
+        "ratio": ratio, "audio": audio})
     out = str(tmp_path / "out.mp4")
     cmd = slot_split.build_command(
         spec, cut, out, {UP: up}, {UP: (320, 240)}, 640, 360, 360, 640, 6.0,
@@ -189,3 +190,21 @@ def test_ffmpeg_render_loops_a_short_upload(tmp_path, ratio):
     assert (w, h) == (360, 640)
     assert abs(duration - 6.0) <= 0.1
     assert has_audio
+
+
+def test_mix_normalises_inside_the_filtergraph(monkeypatch):
+    """-af next to -filter_complex audio is an ffmpeg error ("Simple and complex
+    filtering cannot be used together"): loudnorm joins the amix chain."""
+    monkeypatch.setenv("AUDIO_NORMALIZE", "1")
+    spec = slot_split.parse_slots({"top": {"kind": "source"},
+                                   "bottom": {"kind": "upload", "upload_id": UP},
+                                   "audio": "mix"})
+    cmd = slot_split.build_command(spec, "c.mp4", "o.mp4", {UP: "u.mp4"}, {UP: (320, 240)},
+                                   640, 360, 360, 640, 6.0, (320.0, 150.0))
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert "-af" not in cmd and ",loudnorm=" in graph and graph.endswith("[a]")
+    src = slot_split.parse_slots({"top": {"kind": "source"},
+                                  "bottom": {"kind": "upload", "upload_id": UP}})
+    cmd = slot_split.build_command(src, "c.mp4", "o.mp4", {UP: "u.mp4"}, {UP: (320, 240)},
+                                   640, 360, 360, 640, 6.0, (320.0, 150.0))
+    assert "-af" in cmd  # a plain mapped track keeps the simple filter

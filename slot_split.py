@@ -220,6 +220,12 @@ def build_command(spec, cut_path, out_path, upload_paths, upload_dims,
     graph = build_filtergraph(spec, src_w, src_h, out_w, out_h, upload_dims,
                               face_centre)
     audio_chain, audio_map = audio_plan(spec, source_has_audio)
+    audio_args = audio_encode_args()
+    if audio_chain and "-af" in audio_args:
+        # ffmpeg refuses -af on a stream fed by -filter_complex: normalise inside the chain.
+        k = audio_args.index("-af")
+        audio_chain = f"{audio_chain[:-len('[a]')]},{audio_args[k + 1]}[a]"
+        audio_args = audio_args[:k] + audio_args[k + 2:]
     if audio_chain:
         graph = f"{graph};{audio_chain}"
     return ["ffmpeg", "-y", "-i", cut_path,
@@ -228,7 +234,7 @@ def build_command(spec, cut_path, out_path, upload_paths, upload_dims,
             "-map", "[v]", "-map", audio_map,
             # -t, not -shortest: a looped upload never ends.
             "-t", f"{duration:.3f}",
-            *video_encode_args(QUALITY_FAST), *audio_encode_args(),
+            *video_encode_args(QUALITY_FAST), *audio_args,
             *METADATA_SCRUB, "-movflags", "+faststart", out_path]
 
 
