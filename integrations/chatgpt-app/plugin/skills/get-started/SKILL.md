@@ -6,7 +6,7 @@ description: Use OpenShorts to turn a long video (YouTube link or video file) in
 # OpenShorts: long video to vertical clips
 
 OpenShorts downloads, transcribes and analyses the video on its own servers,
-picks the strongest moments and renders 15-60 s vertical clips with
+picks the strongest moments and renders 30-60 s vertical clips with
 word-by-word captions and an AI-written title. A job takes minutes.
 
 ## The flow
@@ -24,7 +24,7 @@ word-by-word captions and an AI-written title. A job takes minutes.
 ## Options worth setting only when asked
 
 - `target_clips` (1-15): a target, not a guarantee. Leave it unset by default.
-- `clip_min_seconds` / `clip_max_seconds`: default 15 and 60; the max must be at
+- `clip_min_seconds` / `clip_max_seconds`: default 30 and 60; the max must be at
   least 5 s above the min.
 - `auto_hook=false` removes the title burned over the first seconds.
 - `captions=false` when the source already has burned-in subtitles.

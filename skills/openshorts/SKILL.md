@@ -14,7 +14,7 @@ metadata:
 
 # OpenShorts: clip and publish video
 
-OpenShorts turns a long video into vertical 9:16 clips (15-60s each) with
+OpenShorts turns a long video into vertical 9:16 clips (30-60s each) with
 word-level subtitles burned in, reframed so the speaker stays in shot, then
 optionally publishes them. One job takes minutes, not seconds: always work async
 (submit, then webhook or poll).
@@ -65,7 +65,7 @@ most videos yield two to six. It is a target (1-15), not a guarantee. Asking a
 short video for 15 clips does not produce 15 good ones, it produces the same
 handful plus filler.
 
-**Clip length.** `clip_min_seconds` / `clip_max_seconds` default to 15 and 60,
+**Clip length.** `clip_min_seconds` / `clip_max_seconds` default to 30 and 60,
 which is what the platforms reward. The max must sit at least 5 seconds above
 the min.
 

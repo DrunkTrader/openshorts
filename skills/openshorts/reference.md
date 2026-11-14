@@ -38,7 +38,7 @@ a `file` part to upload a local video instead):
   "layouts": ["auto"],
   "output_format": "auto",
   "target_clips": 4,
-  "clip_min_seconds": 15,
+  "clip_min_seconds": 30,
   "clip_max_seconds": 60,
   "webhook_url": "https://example.com/hooks/openshorts",
   "webhook_secret": "change-me",
@@ -50,7 +50,7 @@ a `file` part to upload a local video instead):
 accepts a JSON list or a comma separated string of `auto`, `split`,
 `screencast`, `speaker_cut`, `punch_in`. `output_format` is one of `auto`,
 `vertical`, `horizontal`, `square`. `target_clips` is 1 to 15;
-`clip_min_seconds` 5 to 175; `clip_max_seconds` 10 to 180 and at least 5 above
+`clip_min_seconds` 5 to 85 (default 30); `clip_max_seconds` 10 to 90 (default 60) and at least 5 above
 the minimum.
 
 Success:

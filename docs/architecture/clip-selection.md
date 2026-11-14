@@ -81,10 +81,24 @@ speech are unchanged.
   `GEMINI_API_KEY` and a full video (range jobs do a logged full download). Without
   a key the job fails saying a text-only server cannot see the footage.
 
+## Clip length band (`clip_selection.clip_duration_bounds`)
+
+Clips are 30-60 s by default. A job may ask for its own band
+(`clip_min_seconds` / `clip_max_seconds` on `/api/process` and MCP, the
+dashboard's advanced options), passed to the pipeline as `CLIP_MIN_SECONDS` /
+`CLIP_MAX_SECONDS`: the minimum 5-85 s, the maximum 10-90 s and at least 5 s
+above the minimum. The limits are the `CLIP_*` constants in `clip_selection.py`;
+the API, the MCP schema and `MediaInput.jsx` validate against the same numbers.
+A maximum asked for alone lowers the default minimum (max 20 gives 15-20), a
+minimum alone raises the default maximum. The prompts (`{min_secs}` /
+`{max_secs}`), `bound_clips`, `snap_clip_to_words` and
+`silent_signals.cut_from_peak` all read this band. The scoring windows stay
+~90 s and only grow when the maximum needs it (`max(90, 1.5 * max_secs)`).
+
 ## Silent footage: the vision fallback (`main.get_visual_clips`)
 
 The vision pass uploads the video, Gemini returns the same `{"shorts"}` shape
-(`gemini_worker.VisualResponse`) in the same 15-60 s band, so every later stage
+(`gemini_worker.VisualResponse`) in the same 30-60 s band, so every later stage
 is identical. `CLIP_TARGET_MIN`/`MAX` apply directly (there are no scoring
 windows). The transcript is stored as `{"language": "none", "segments": []}`, so
 the clips have no subtitles, which is correct.
