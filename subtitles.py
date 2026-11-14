@@ -287,6 +287,12 @@ CAPTION_PRESETS = {
               "max_chars": 12},
 }
 
+def auto_caption_style(preset=None):
+    """AUTO_CAPTION_STYLE with a CAPTION_PRESETS look laid over it, when one is
+    named (per job, AUTO_CAPTION_PRESET). Unknown names keep the default look."""
+    return {**AUTO_CAPTION_STYLE, **CAPTION_PRESETS.get(str(preset or "").strip().lower(), {})}
+
+
 # Characters per line at font size 44, per font (Anton is condensed,
 # Montserrat wide). Mirrors lineBudget in SubtitleModal.jsx.
 _LINE_CHARS = {"Anton": 16, "Montserrat ExtraBold": 9, "Impact": 16}

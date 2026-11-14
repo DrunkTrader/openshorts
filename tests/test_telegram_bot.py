@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qs
 
 import httpx
 import pytest
@@ -84,24 +85,120 @@ def test_unlisted_chat_gets_no_reply_and_no_api_call(rig):
     assert rig.bot.ignored == 2
 
 
-def test_url_message_queues_job_via_api_process(rig):
-    rig.routes["POST /api/process"] = httpx.Response(200, json={"job_id": "abcdef12-3456", "status": "queued"})
+def cb(data, chat=CHAT, user=CHAT, mid=7):
+    return {"update_id": 2, "callback_query": {
+        "id": "q1", "from": {"id": user}, "data": data,
+        "message": {"message_id": mid, "chat": {"id": chat}}}}
 
+
+def form(req):
+    return {k: v[0] for k, v in parse_qs(req.content.decode()).items()}
+
+
+def last_json(rig, method):
+    return json.loads(rig.named(method)[-1].content)
+
+
+def press(rig, *datas, wait=False):
+    """Callbacks in one loop; background tasks are awaited (wait) or cancelled."""
     async def go():
-        await rig.bot.handle_update(msg("watch this https://youtu.be/abc, please"))
+        for d in datas:
+            await rig.bot.handle_update(cb(d))
+        while wait and rig.bot._tasks:
+            await asyncio.gather(*list(rig.bot._tasks))
         for t in list(rig.bot._tasks):
             t.cancel()
     run(go())
-    body = json.loads(rig.named("POST /api/process")[0].content)
-    assert body == {"url": "https://youtu.be/abc", "acknowledged": True}
-    assert "Queued job abcdef12" in rig.texts()[0]
+
+
+def test_url_message_opens_panel_and_start_queues_job(rig):
+    rig.routes["POST /api/process"] = httpx.Response(200, json={"job_id": "abcdef12-3456", "status": "queued"})
+    run(rig.bot.handle_update(msg("watch this https://youtu.be/abc, please")))
+    assert rig.named("POST /api/process") == []  # nothing queued before Start
+    panel = last_json(rig, "sendMessage")
+    assert "https://youtu.be/abc" in panel["text"] and "Captions: default" in panel["text"]
+    press(rig, "go")
+    body = form(rig.named("POST /api/process")[0])
+    assert body == {"url": "https://youtu.be/abc", "acknowledged": "true", "output_format": "vertical",
+                    "layouts": "auto", "clip_min_seconds": "30", "clip_max_seconds": "60",
+                    "captions": "default", "auto_hook": "true", "auto_hook_style": "pill"}
+    assert "Queued job abcdef12" in rig.texts()[-1]
     assert rig.bot.jobs[str(CHAT)] == ["abcdef12-3456"]
+    assert rig.bot.data["job_settings"]["abcdef12-3456"]["priv"] == "private"
+    assert rig.bot.data["panels"][str(CHAT)] == {}
+
+
+def test_start_sends_exactly_the_chosen_fields(rig):
+    rig.routes["POST /api/process"] = httpx.Response(200, json={"job_id": "j1"})
+    run(rig.bot.handle_update(msg("https://youtu.be/abc")))
+    press(rig, "s:cap:off", "s:lay:split", "s:fmt:square", "s:hook:off", "s:n:5",
+          "s:len:60-90", "s:priv:public", "go")
+    assert form(rig.named("POST /api/process")[0]) == {
+        "url": "https://youtu.be/abc", "acknowledged": "true", "output_format": "square",
+        "layouts": "split", "clip_min_seconds": "60", "clip_max_seconds": "90",
+        "captions": "false", "auto_hook": "false", "target_clips": "5"}
+    assert rig.bot.data["job_settings"]["j1"]["priv"] == "public"
+
+
+def test_button_toggle_edits_panel_in_place(rig):
+    run(rig.bot.handle_update(msg("https://youtu.be/abc")))
+    press(rig, "m:cap")
+    sub = last_json(rig, "editMessageReplyMarkup")
+    assert sub["message_id"] == 7
+    labels = [b["text"] for row in sub["reply_markup"]["inline_keyboard"] for b in row]
+    assert "✓ default" in labels and "hormozi" in labels and "off" in labels
+    press(rig, "s:cap:hormozi")
+    ed = last_json(rig, "editMessageText")
+    assert ed["message_id"] == 7 and "Captions: hormozi" in ed["text"]
+    assert any(b["text"] == "Captions: hormozi" for row in ed["reply_markup"]["inline_keyboard"] for b in row)
+    press(rig, "s:cap:bogus")  # not an offered value: ignored
+    assert rig.bot.data["panels"][str(CHAT)]["7"]["s"]["cap"] == "hormozi"
+    assert len(rig.named("answerCallbackQuery")) == 3
+    press(rig, "x")
+    assert last_json(rig, "editMessageText")["text"] == "Cancelled."
+    assert rig.bot.data["panels"][str(CHAT)] == {}
+
+
+def test_callbacks_from_unlisted_chat_or_user_are_silent(rig):
+    run(rig.bot.handle_update(msg("https://youtu.be/abc")))
+    rig.calls.clear()
+    run(rig.bot.handle_update(cb("s:cap:off", chat=999, user=CHAT)))
+    run(rig.bot.handle_update(cb("s:cap:off", chat=CHAT, user=999)))
+    run(rig.bot.handle_update(cb("go", chat=CHAT, user=999)))
+    assert rig.calls == []
+    assert rig.bot.data["panels"][str(CHAT)]["7"]["s"]["cap"] == "default"
+
+
+def _every_button(bot, job_id):
+    s = dict(tb.DEFAULTS)
+    boards = [bot.panel_keyboard(s), bot.presets_keyboard(CHAT),
+              bot.clip_keyboard(job_id, 99, {"state": ""}),
+              [[tb._btn("y", "ow:y"), tb._btn("n", "ow:n")]]]
+    boards += [bot.option_keyboard(s, k) for k in tb.OPTIONS]
+    return [b for board in boards for row in board for b in row]
+
+
+def test_callback_data_fits_64_bytes(tmp_path):
+    r = Rig(tmp_path, n8n_url="http://n8n.local/hook", n8n_secret="S")
+    r.bot._presets_of(CHAT)[tb.preset_name("é" * 40)] = dict(tb.DEFAULTS)
+    r.bot._presets_of(CHAT)[tb.preset_name("x" * 80)] = dict(tb.DEFAULTS)
+    buttons = _every_button(r.bot, "0123456789abcdef0123456789abcdef0123")
+    assert len(buttons) > 40
+    for b in buttons:
+        assert len(b["callback_data"].encode()) <= 64, b
 
 
 def test_api_refusal_is_reported(rig):
     rig.routes["POST /api/process"] = httpx.Response(400, json={"detail": "URL not allowed"})
     run(rig.bot.handle_update(msg("https://10.0.0.1/x")))
-    assert "URL not allowed" in rig.texts()[0]
+    press(rig, "go")
+    assert "URL not allowed" in rig.texts()[-1]
+
+
+def test_expired_panel_says_so(rig):
+    press(rig, "go")
+    assert "expired" in last_json(rig, "answerCallbackQuery")["text"]
+    assert rig.named("POST /api/process") == []
 
 
 def test_non_url_text_gets_help_not_job(rig):
@@ -128,15 +225,13 @@ def test_video_file_posts_multipart(rig, monkeypatch):
     rig.routes["getFile"] = ok({"file_path": "videos/f.mp4"})
     rig.routes["GET /file/bot" + TOKEN + "/videos/f.mp4"] = httpx.Response(200, content=b"x" * 100)
     rig.routes["POST /api/process"] = httpx.Response(200, json={"job_id": "j" * 12})
-
-    async def go():
-        await rig.bot.handle_update(msg(video={"file_id": "f", "file_size": 100, "file_name": "a.mp4"}))
-        for t in list(rig.bot._tasks):
-            t.cancel()
-    run(go())
+    run(rig.bot.handle_update(msg(video={"file_id": "f", "file_size": 100, "file_name": "a.mp4"})))
+    assert rig.named("getFile") == [] and "a.mp4" in rig.texts()[0]  # panel first
+    press(rig, "s:fmt:horizontal", "go")
     req = rig.named("POST /api/process")[0]
     assert req.headers["content-type"].startswith("multipart/form-data")
     assert b'name="file"' in req.content and b"acknowledged" in req.content
+    assert b'name="output_format"\r\n\r\nhorizontal' in req.content
     assert made and not os.path.exists(made[0])
 
 
@@ -353,3 +448,215 @@ def test_run_from_env_silences_httpx_request_logs(caplog):
             await c.get(f"https://api.telegram.org/bot{TOKEN}/getMe")
     asyncio.run(call())
     assert TOKEN not in caplog.text
+
+
+# --- presets ---------------------------------------------------------------
+def _say_name(rig, name):
+    run(rig.bot.handle_update(msg(name)))
+
+
+def test_preset_save_load_overwrite_delete_default(tmp_path):
+    rig = Rig(tmp_path)
+    run(rig.bot.handle_update(msg("https://youtu.be/abc")))
+    press(rig, "s:hook:dark", "sv")
+    assert "name" in rig.texts()[-1]
+    _say_name(rig, "  My/Talk!!  preset ")
+    assert rig.texts()[-1] == "Saved preset MyTalk preset."
+    assert rig.bot.data["presets"][str(CHAT)]["MyTalk preset"]["hook"] == "dark"
+
+    # Overwrite asks first; "No" keeps the old settings.
+    press(rig, "s:hook:red", "sv")
+    _say_name(rig, "MyTalk preset")
+    ask = last_json(rig, "sendMessage")
+    assert "Overwrite" in ask["text"] and ask["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == "ow:y"
+    press(rig, "ow:n")
+    assert rig.bot.data["presets"][str(CHAT)]["MyTalk preset"]["hook"] == "dark"
+    press(rig, "sv")
+    _say_name(rig, "MyTalk preset")
+    press(rig, "ow:y")
+    assert rig.bot.data["presets"][str(CHAT)]["MyTalk preset"]["hook"] == "red"
+    assert "Saved preset" in last_json(rig, "editMessageText")["text"]
+
+    # Load: list as buttons, then apply.
+    press(rig, "s:hook:off", "ld")
+    names = [b["callback_data"] for row in last_json(rig, "editMessageReplyMarkup")["reply_markup"]["inline_keyboard"]
+             for b in row]
+    assert "l:MyTalk preset" in names
+    press(rig, "l:MyTalk preset")
+    assert "Hook: red" in last_json(rig, "editMessageText")["text"]
+
+    # Default: new panels start from it; persisted across a restart.
+    run(rig.bot.handle_update(msg("/preset_default MyTalk preset")))
+    run(rig.bot.handle_update(msg("/presets")))
+    assert "MyTalk preset (default)" in rig.texts()[-1]
+    rig2 = Rig(tmp_path)
+    run(rig2.bot.handle_update(msg("https://youtu.be/xyz")))
+    assert "Hook: red" in rig2.texts()[-1]
+
+    run(rig2.bot.handle_update(msg("/preset_delete MyTalk preset")))
+    assert rig2.bot.data["presets"][str(CHAT)] == {} and str(CHAT) not in rig2.bot.data["default_preset"]
+    run(rig2.bot.handle_update(msg("https://youtu.be/xyz")))
+    assert "Hook: pill" in rig2.texts()[-1]
+    run(rig2.bot.handle_update(msg("/preset_default nope")))
+    assert "No preset" in rig2.texts()[-1]
+
+
+def test_preset_name_is_sanitised_and_bounded():
+    assert tb.preset_name("a\nb\x00c<script>") == "abcscript"
+    assert len(tb.preset_name("é" * 100).encode()) <= tb.NAME_BYTES
+    assert tb.preset_name("!!!") == ""
+
+
+def test_command_or_link_does_not_become_a_preset_name(rig):
+    run(rig.bot.handle_update(msg("https://youtu.be/abc")))
+    press(rig, "sv")
+    run(rig.bot.handle_update(msg("https://youtu.be/other")))
+    assert rig.bot.data["presets"].get(str(CHAT), {}) == {}
+    assert "youtu.be/other" in rig.texts()[-1]  # a new panel instead
+
+
+def test_load_with_no_presets_says_so(rig):
+    run(rig.bot.handle_update(msg("https://youtu.be/abc")))
+    press(rig, "ld")
+    assert "No presets" in last_json(rig, "answerCallbackQuery")["text"]
+
+
+def test_stale_preset_values_fall_back_to_defaults():
+    assert tb.clean_settings({"hook": "gone_style", "n": "5"}) == {**tb.DEFAULTS, "n": "5"}
+
+
+# --- approval and n8n upload --------------------------------------------------
+JOB = "jobid-1234"
+N8N = "http://n8n.local/webhook/abc-secret-path"
+SECRET = "s3cr3t-value"
+CLIP = {"video_url": "/videos/jobid-1234/a.mp4", "video_title_for_youtube_short": "Big title",
+        "video_description_for_instagram": "Watch this #ai #n8n #ai"}
+
+
+def up_rig(tmp_path, **kw):
+    kw.setdefault("n8n_url", N8N)
+    kw.setdefault("n8n_secret", SECRET)
+    r = Rig(tmp_path, send_files=True, **kw)
+    r.routes["GET /videos/jobid-1234/a.mp4"] = httpx.Response(200, content=b"MP4DATA")
+    r.routes[f"GET /api/status/{JOB}"] = status("completed", [CLIP])
+    r.bot.data["job_settings"][JOB] = {**tb.DEFAULTS, "priv": "unlisted"}
+    return r
+
+
+def deliver_job(r):
+    async def go():
+        async with r.client() as c:
+            await r.bot._deliver(c, CHAT, 0, CLIP, JOB)
+    run(go())
+
+
+def multipart_fields(req):
+    ctype = req.headers["content-type"]
+    boundary = ctype.split("boundary=")[1].encode()
+    out = {}
+    for part in req.content.split(b"--" + boundary)[1:-1]:
+        head, _, val = part.strip(b"\r\n").partition(b"\r\n\r\n")
+        name = head.split(b'name="')[1].split(b'"')[0].decode()
+        out[name] = val
+    return out
+
+
+def test_clip_has_approval_buttons_and_upload_posts_exact_contract(tmp_path):
+    r = up_rig(tmp_path)
+    r.routes["POST /webhook/abc-secret-path"] = httpx.Response(200, json={
+        "ok": True, "drive_link": "https://drive.example/f", "youtube_url": "https://youtu.be/NEW"})
+    deliver_job(r)
+    sent = r.named("sendVideo")[0]
+    kb = json.loads(multipart_fields(sent)["reply_markup"])["inline_keyboard"]
+    datas = [b["callback_data"] for row in kb for b in row]
+    assert datas == [f"u:{JOB}:0", f"k:{JOB}:0", f"t:{JOB}:0"]
+    press(r, f"u:{JOB}:0", wait=True)
+    post = r.named("POST /webhook/abc-secret-path")[0]
+    assert post.headers["X-OpenShorts-Secret"] == SECRET
+    assert post.headers["content-type"].startswith("multipart/form-data")
+    f = multipart_fields(post)
+    assert set(f) == {"video", "title", "description", "tags", "privacy", "job_id", "clip_index"}
+    assert f["video"] == b"MP4DATA" and f["title"] == b"Big title"
+    assert f["description"] == b"Watch this #ai #n8n #ai" and f["tags"] == b"ai,n8n"
+    assert f["privacy"] == b"unlisted" and f["job_id"] == JOB.encode() and f["clip_index"] == b"0"
+    caps = [json.loads(c.content)["caption"] for c in r.named("editMessageCaption")]
+    assert "⏳ Uploading…" in caps[0]
+    assert "✅ On YouTube: https://youtu.be/NEW (Drive: https://drive.example/f)" in caps[-1]
+    assert last_json(r, "editMessageCaption")["reply_markup"]["inline_keyboard"] == []
+
+
+def test_no_double_upload(tmp_path):
+    r = up_rig(tmp_path)
+    r.routes["POST /webhook/abc-secret-path"] = httpx.Response(200, json={
+        "ok": True, "drive_link": "d", "youtube_url": "https://youtu.be/NEW"})
+    deliver_job(r)
+    press(r, f"u:{JOB}:0")
+    press(r, f"u:{JOB}:0")  # still uploading (task cancelled by press())
+    assert "Already uploading" in last_json(r, "answerCallbackQuery")["text"]
+    r.bot.data["clips"][f"{JOB}:0"]["state"] = ""
+    press(r, f"u:{JOB}:0", wait=True)
+    press(r, f"u:{JOB}:0")
+    assert "Already uploaded: https://youtu.be/NEW" == last_json(r, "answerCallbackQuery")["text"]
+    assert len(r.named("POST /webhook/abc-secret-path")) == 1
+
+
+def test_upload_hidden_when_webhook_unset(tmp_path):
+    r = up_rig(tmp_path, n8n_url="")
+    deliver_job(r)
+    assert "reply_markup" not in multipart_fields(r.named("sendVideo")[0])
+    run(r.bot.handle_update(msg("/help")))
+    assert "N8N_UPLOAD_WEBHOOK_URL is not set" in r.texts()[-1]
+    press(r, f"u:{JOB}:0")
+    assert r.named("POST /webhook/abc-secret-path") == []
+
+
+def test_edit_title_then_upload_uses_it(tmp_path):
+    r = up_rig(tmp_path)
+    r.routes["POST /webhook/abc-secret-path"] = httpx.Response(200, json={"ok": True, "youtube_url": "y"})
+    deliver_job(r)
+    press(r, f"t:{JOB}:0")
+    assert "new title" in r.texts()[-1]
+    run(r.bot.handle_update(msg("  A   better\ntitle " + "x" * 200)))
+    rec = r.bot.data["clips"][f"{JOB}:0"]
+    assert rec["title"].startswith("A better title x") and len(rec["title"]) == 100
+    assert last_json(r, "editMessageCaption")["caption"].startswith("1. A better title")
+    press(r, f"u:{JOB}:0", wait=True)
+    assert multipart_fields(r.named("POST /webhook/abc-secret-path")[0])["title"] == rec["title"].encode()
+
+
+def test_skip_removes_buttons(tmp_path):
+    r = up_rig(tmp_path)
+    deliver_job(r)
+    press(r, f"k:{JOB}:0")
+    ed = last_json(r, "editMessageCaption")
+    assert "⏭ Skipped" in ed["caption"] and ed["reply_markup"]["inline_keyboard"] == []
+
+
+def test_n8n_error_surfaces_without_secrets(tmp_path, caplog):
+    r = up_rig(tmp_path)
+    r.routes["POST /webhook/abc-secret-path"] = httpx.Response(200, json={
+        "ok": False, "error": f"quota exceeded calling {N8N} with {SECRET}"})
+    deliver_job(r)
+    press(r, f"u:{JOB}:0", wait=True)
+    cap = last_json(r, "editMessageCaption")["caption"]
+    assert "Upload failed: quota exceeded" in cap and SECRET not in cap and N8N not in cap
+    # Network failure: the exception text (with the URL) never reaches the chat or logs.
+    def boom(req):
+        raise httpx.ConnectError(f"cannot reach {req.url} {SECRET}")
+    r.routes["POST /webhook/abc-secret-path"] = boom
+    with caplog.at_level(logging.DEBUG):
+        press(r, f"u:{JOB}:0", wait=True)
+    cap = last_json(r, "editMessageCaption")["caption"]
+    assert "did not answer" in cap
+    for text in (cap, caplog.text):
+        assert SECRET not in text and "abc-secret-path" not in text and TOKEN not in text
+    # A failed upload offers the buttons again.
+    assert last_json(r, "editMessageCaption")["reply_markup"]["inline_keyboard"]
+
+
+def test_clip_callbacks_from_unlisted_user_are_silent(tmp_path):
+    r = up_rig(tmp_path)
+    deliver_job(r)
+    r.calls.clear()
+    run(r.bot.handle_update(cb(f"u:{JOB}:0", user=999)))
+    assert r.calls == []

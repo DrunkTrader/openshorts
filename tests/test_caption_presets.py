@@ -79,3 +79,12 @@ def test_preset_fills_only_fields_not_sent():
                                     if k not in req.model_fields_set})
     assert merged.highlight_color == "#00FF00"
     assert merged.reveal is True and merged.font_name == "Montserrat ExtraBold"
+
+
+def test_auto_caption_style_overlays_a_named_preset():
+    import subtitles
+    assert subtitles.auto_caption_style(None) == subtitles.AUTO_CAPTION_STYLE
+    assert subtitles.auto_caption_style("nope") == subtitles.AUTO_CAPTION_STYLE
+    s = subtitles.auto_caption_style("Hormozi")
+    assert s["reveal"] is True and s["max_chars"] == 9
+    assert s["alignment"] == subtitles.AUTO_CAPTION_STYLE["alignment"]  # kept from the base

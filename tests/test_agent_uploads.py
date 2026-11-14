@@ -169,3 +169,18 @@ def test_auto_hook_false_opts_out(dirs, monkeypatch):
     monkeypatch.setattr(app_module.job_queue, "put", fake_put)
     payload = _tool_payload(_mcp("process_video", {"upload_id": slot["upload_id"], "confirm_rights": True, "auto_hook": False}))
     assert "AUTO_HOOK" not in app_module.jobs[payload["job_id"]]["env"]
+
+
+def test_captions_preset_name_sets_the_job_look(dirs, monkeypatch):
+    async def _go(captions, slot):
+        async with _client() as c:
+            await c.put(f"/api/uploads/{slot['upload_id']}", content=b"x" * 100)
+            return await c.post("/api/process", data={"upload_id": slot["upload_id"],
+                                                      "acknowledged": "true", "captions": captions})
+    async def fake_put(item): pass
+    monkeypatch.setattr(app_module.job_queue, "put", fake_put)
+    resp = asyncio.run(_go("Hormozi", _tool_payload(_mcp("create_upload", {}))))
+    env = app_module.jobs[resp.json()["job_id"]]["env"]
+    assert env["AUTO_CAPTION_PRESET"] == "hormozi" and "AUTO_CAPTIONS" not in env
+    resp = asyncio.run(_go("nonsense", _tool_payload(_mcp("create_upload", {}))))
+    assert "AUTO_CAPTION_PRESET" not in app_module.jobs[resp.json()["job_id"]]["env"]

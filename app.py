@@ -3903,6 +3903,11 @@ async def process_endpoint(
     if captions is not None and str(captions).lower() in ("0", "false", "no"):
         env["AUTO_CAPTIONS"] = "0"
         print(f"[captions] job={job_id} auto-captions off")
+    elif captions is not None:
+        # captions=<preset name>: auto-captions on, in that CAPTION_PRESETS look.
+        from subtitles import CAPTION_PRESETS as _presets
+        if str(captions).strip().lower() in _presets:
+            env["AUTO_CAPTION_PRESET"] = str(captions).strip().lower()
 
     input_path = None
     if url:
