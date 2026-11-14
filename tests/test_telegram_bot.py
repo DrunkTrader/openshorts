@@ -660,3 +660,20 @@ def test_clip_callbacks_from_unlisted_user_are_silent(tmp_path):
     r.calls.clear()
     run(r.bot.handle_update(cb(f"u:{JOB}:0", user=999)))
     assert r.calls == []
+
+
+def test_upload_disabled_when_webhook_secret_missing(monkeypatch, tmp_path):
+    """A webhook URL without its secret must not be used (fail closed)."""
+    seen = {}
+
+    async def fake_run(self, stop, is_active):
+        seen["url"] = self.n8n_url
+
+    monkeypatch.setattr(tb.IntakeBot, "run", fake_run)
+    base = {"TELEGRAM_INTAKE_TOKEN": TOKEN, "TELEGRAM_ALLOWED_CHAT_IDS": str(CHAT),
+            "TELEGRAM_STATE_PATH": str(tmp_path / "s.json"),
+            "N8N_UPLOAD_WEBHOOK_URL": "http://127.0.0.1:9/hook"}
+    asyncio.run(tb.run_from_env(env=dict(base)))
+    assert seen["url"] == ""
+    asyncio.run(tb.run_from_env(env={**base, "N8N_WEBHOOK_SECRET": "s3cret"}))
+    assert seen["url"] == "http://127.0.0.1:9/hook"

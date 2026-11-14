@@ -888,7 +888,9 @@ async def run_from_env(is_active: Callable[[], bool] = lambda: True, env=None):
         n8n_url=env.get("N8N_UPLOAD_WEBHOOK_URL", ""),
         n8n_secret=env.get("N8N_WEBHOOK_SECRET", ""))
     if bot.n8n_url and not bot.n8n_secret:
-        log.warning("N8N_UPLOAD_WEBHOOK_URL is set without N8N_WEBHOOK_SECRET")
+        # Fail closed: never post clips to the webhook without its secret.
+        log.warning("YouTube upload disabled: N8N_UPLOAD_WEBHOOK_URL is set without N8N_WEBHOOK_SECRET")
+        bot.n8n_url = ""
     log.info("intake bot started for %d chat(s)", len(allowed))
     await bot.run(asyncio.Event(), is_active)
 
