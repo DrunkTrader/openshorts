@@ -46,8 +46,12 @@ This is separate from the admin-alert bot (`TELEGRAM_BOT_TOKEN`,
   `TELEGRAM_UPLOAD_POST_PROFILE`. `<job>` is the short id from "Queued".
   Platforms: `tiktok,instagram,youtube`. Times use `TELEGRAM_TIMEZONE`
   (default UTC; on Windows install `tzdata`, which requirements.txt does).
-- `/scheduled` lists pending posts, `/cancel <id>` cancels one (a scheduled
-  post, not a job: jobs are cancelled with `/jobs` or the 🛑 button).
+- `/scheduled` lists this chat's scheduled YouTube uploads (title and local
+  time, each with a ❌ cancel button; the list is redrawn after a cancel), then
+  the pending Upload-Post posts when Upload-Post is configured. Without
+  Upload-Post it still lists the YouTube uploads. `/cancel <id>` cancels an
+  Upload-Post post (not a job: jobs are cancelled with `/jobs` or the 🛑
+  button).
 - `/library` lists the split-screen library with a 🗑 delete button per video
   (it imports the server's import folder first, see below). Send a video or
   a video file with the caption `/save <name>` to add it (name rules as for
@@ -120,14 +124,41 @@ Presets are per chat, in the bot's state file.
 
 ## Approval and upload to YouTube (n8n)
 
-Set `N8N_UPLOAD_WEBHOOK_URL` (and `N8N_WEBHOOK_SECRET`) to get three buttons
-under each clip: Upload to YouTube, Skip, Edit title. Without the URL the
-clips come without buttons and `/help` says so.
+Set `N8N_UPLOAD_WEBHOOK_URL` (and `N8N_WEBHOOK_SECRET`) to get four buttons
+under each clip: Upload to YouTube, Skip, Edit title, Schedule upload. Without
+the URL (or with the URL but no secret) the clips come without buttons and
+`/help` says so.
 
 - Edit title: the next text message becomes the clip's title (100 chars max).
 - Upload: the clip's message turns to "⏳ Uploading…", then to
   "✅ On YouTube: <url> (Drive: <link>)", or a short error. A clip already
   uploaded (or uploading) is not sent again. A failed upload can be retried.
+
+### Scheduled upload
+
+🗓 Schedule upload sends the same webhook request later, from the bot itself
+(YouTube's `publishAt` is not used: uploads from an unaudited API project stay
+private anyway). Times are in `TELEGRAM_TIMEZONE`.
+
+- The menu: in 1 hour, today 20:00 (only while it is still ahead), tomorrow
+  09:00, tomorrow 18:00, ⌨️ Type date/time (the next text message,
+  `YYYY-MM-DD HH:MM`), « Back. Times in the past or more than 60 days ahead are
+  refused (checked again when Yes is pressed).
+- A confirmation message follows: "Schedule upload for <weekday, local time>
+  (privacy: <job privacy>)?" with ✅ Yes / ✖️ No.
+- Once scheduled, the clip says "🗓 Scheduled for <time>" and has ❌ Cancel
+  schedule, ⏫ Upload now and ✏️ Edit title. The upload sends the title as it is
+  when it runs. Cancelling gives the clip its normal buttons back.
+- Each clip has one state: none → `scheduled` → `uploading` → `uploaded` or
+  `failed`. A due clip leaves `scheduled` before anything is sent, so a second
+  check or an Upload now press cannot send it twice. A failed upload shows the
+  error (secrets masked) and the normal buttons again.
+- The scheduler runs inside the bot: it checks every 30 s, and once at start.
+  An upload whose time passed while the server was down runs at start, and its
+  message says "⏰ Ran late: it was scheduled for <time>." (any upload started
+  more than 2 minutes after its time says so). Schedules are in the state file,
+  so they survive restarts; a clip that was `uploading` when the server stopped
+  is not retried by itself (press Upload to YouTube if it did not arrive).
 
 The webhook contract (fixed with the n8n workflow):
 
@@ -154,13 +185,18 @@ atomically:
   "panels": {"<chat>": {"<message id>": {"src": {"url": ...} | {"file": {...}}, "s": {settings}}}},
   "presets": {"<chat>": {"<name>": {settings}}},
   "default_preset": {"<chat>": "<name>"},
-  "awaiting": {"<chat>": {"kind": "name" | "overwrite" | "title" | "split_video"
-                          | "split_link" | "split_offset", ...}},
+  "awaiting": {"<chat>": {"kind": "name" | "overwrite" | "title" | "when"
+                          | "split_video" | "split_link" | "split_offset", ...}},
   "job_settings": {"<job id>": {settings}},          # last 200
   "clips": {"<job id>:<index>": {"chat", "msg", "kind", "i", "title", "link",
-                                 "state", "youtube_url", "drive_link", "error"}}  # last 500
+                                 "state", "at", "late", "youtube_url", "drive_link",
+                                 "error"}}  # last 500 (scheduled ones are never dropped)
 }
 ```
+
+A clip's `state` is `""`, `scheduled`, `uploading`, `uploaded`, `failed` or
+`skipped`; `at` is the scheduled time (ISO 8601, UTC) while it is `scheduled`;
+`late` is the "ran late" note.
 
 `settings` is `{"cap", "lay", "fmt", "hook", "n", "len", "priv", "spl", "pos",
 "rat", "aud", "off", "src"}`; `src` is `{"id", "name"}` of a library item or

@@ -180,6 +180,12 @@ def _every_button(bot, job_id):
     boards += [bot.split_keyboard(s_on), bot.split_keyboard(s), bot.source_keyboard(),
                bot.pick_keyboard(long_items), bot.library_keyboard(long_items), bot.panel_keyboard(s_on)]
     boards += [bot.cancel_keyboard(job_id, w) for w in "sl"] + [bot.confirm_keyboard(job_id, w) for w in "sl"]
+    key = f"{job_id}:99"
+    boards += [bot.clip_keyboard(job_id, 99, {"state": "scheduled"}),
+               bot.schedule_keyboard(key, datetime(2026, 1, 1, tzinfo=timezone.utc)),
+               # the confirmation (epoch up to year 2286 is 10 digits) and a /scheduled row
+               [[tb._btn("y", f"qy:{10 ** 10 - 1}:{key}"), tb._btn("n", f"qn:{key}")]],
+               [[tb._btn("x", f"qx:{key}")]]]
     return [b for board in boards for row in board for b in row]
 
 
@@ -574,7 +580,7 @@ def test_clip_has_approval_buttons_and_upload_posts_exact_contract(tmp_path):
     sent = r.named("sendVideo")[0]
     kb = json.loads(multipart_fields(sent)["reply_markup"])["inline_keyboard"]
     datas = [b["callback_data"] for row in kb for b in row]
-    assert datas == [f"u:{JOB}:0", f"k:{JOB}:0", f"t:{JOB}:0"]
+    assert datas == [f"u:{JOB}:0", f"k:{JOB}:0", f"t:{JOB}:0", f"q:{JOB}:0"]
     press(r, f"u:{JOB}:0", wait=True)
     post = r.named("POST /webhook/abc-secret-path")[0]
     assert post.headers["X-OpenShorts-Secret"] == SECRET
@@ -1043,3 +1049,275 @@ def test_cancel_callbacks_and_jobs_from_unlisted_sender_are_silent(rig):
         run(rig.bot.handle_update(cb(data, user=999)))
         run(rig.bot.handle_update(cb(data, chat=999)))
     assert rig.calls == []
+
+
+# --- scheduled YouTube uploads ------------------------------------------------------
+KEY = f"{JOB}:0"
+HOOK = "POST /webhook/abc-secret-path"
+NOW = datetime(2026, 11, 14, 10, 0, tzinfo=timezone.utc)   # 15:30 in Asia/Kolkata
+
+
+def q_rig(tmp_path, now=NOW, deliver=True, **kw):
+    r = up_rig(tmp_path, tz="Asia/Kolkata", **kw)
+    r.clock = [now]
+    r.bot.now = lambda: r.clock[0]
+    r.routes[HOOK] = httpx.Response(200, json={"ok": True, "youtube_url": "https://youtu.be/S"})
+    if deliver:
+        deliver_job(r)
+    return r
+
+
+def due(r):
+    """One scheduler check, upload tasks awaited."""
+    async def go():
+        await r.bot.run_due()
+        while r.bot._tasks:
+            await asyncio.gather(*list(r.bot._tasks))
+    run(go())
+
+
+def schedule_at(r, when):
+    """Confirm a schedule for ``when`` (the Yes button of the confirmation)."""
+    press(r, f"qy:{int(when.timestamp())}:{KEY}")
+
+
+def rec_of(r):
+    return r.bot.data["clips"][KEY]
+
+
+def test_quick_choices_are_kolkata_instants(tmp_path):
+    utc = timezone.utc
+    assert tb.quick_time("h", NOW, "Asia/Kolkata") == datetime(2026, 11, 14, 11, 0, tzinfo=utc)
+    assert tb.quick_time("e", NOW, "Asia/Kolkata") == datetime(2026, 11, 14, 14, 30, tzinfo=utc)
+    assert tb.quick_time("m", NOW, "Asia/Kolkata") == datetime(2026, 11, 15, 3, 30, tzinfo=utc)
+    assert tb.quick_time("a", NOW, "Asia/Kolkata") == datetime(2026, 11, 15, 12, 30, tzinfo=utc)
+    # 23:00 UTC is already 04:30 the next day in Kolkata: "tomorrow" is the local tomorrow.
+    late = datetime(2026, 11, 14, 23, 0, tzinfo=utc)
+    assert tb.quick_time("m", late, "Asia/Kolkata") == datetime(2026, 11, 16, 3, 30, tzinfo=utc)
+    assert tb.quick_time("zz", NOW, "Asia/Kolkata") is None
+
+    r = q_rig(tmp_path)
+    press(r, f"q:{KEY}")
+    menu = last_json(r, "editMessageReplyMarkup")["reply_markup"]["inline_keyboard"]
+    assert [b["text"] for row in menu for b in row] == [
+        "in 1 hour", "today 20:00", "tomorrow 09:00", "tomorrow 18:00", "⌨️ Type date/time", "« Back"]
+    # Each button asks to confirm exactly its instant.
+    for code, want in (("h", "11:00"), ("e", "14:30"), ("m", "03:30"), ("a", "12:30")):
+        press(r, f"qa:{code}:{KEY}")
+        yes = last_json(r, "sendMessage")["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+        epoch = int(yes.split(":")[1])
+        assert epoch == int(tb.quick_time(code, NOW, "Asia/Kolkata").timestamp())
+        assert datetime.fromtimestamp(epoch, timezone.utc).strftime("%H:%M") == want
+    # 20:30 in Kolkata: "today 20:00" is gone.
+    r.clock[0] = datetime(2026, 11, 14, 15, 0, tzinfo=utc)
+    press(r, f"q:{KEY}")
+    menu = last_json(r, "editMessageReplyMarkup")["reply_markup"]["inline_keyboard"]
+    assert "today 20:00" not in [b["text"] for row in menu for b in row]
+    press(r, f"qb:{KEY}")   # Back: the normal buttons again
+    assert kb_datas(last_json(r, "editMessageCaption")["reply_markup"]["inline_keyboard"])[-1] == f"q:{KEY}"
+
+
+def test_confirmation_text_and_yes_no(tmp_path):
+    r = q_rig(tmp_path)
+    press(r, f"qa:e:{KEY}")
+    ask = last_json(r, "sendMessage")
+    assert ask["text"].splitlines()[0] == "Schedule upload for Sat 14 Nov 2026 20:00 Asia/Kolkata (privacy: unlisted)?"
+    assert [b["text"] for b in ask["reply_markup"]["inline_keyboard"][0]] == ["✅ Yes", "✖️ No"]
+    press(r, f"qn:{KEY}")
+    assert last_json(r, "editMessageText")["text"] == "Not scheduled."
+    assert rec_of(r)["state"] == ""
+    press(r, ask["reply_markup"]["inline_keyboard"][0][0]["callback_data"])
+    assert rec_of(r)["state"] == "scheduled" and rec_of(r)["at"] == "2026-11-14T14:30:00+00:00"
+    cap = last_json(r, "editMessageCaption")
+    assert "🗓 Scheduled for Sat 14 Nov 2026 20:00 Asia/Kolkata" in cap["caption"]
+    assert kb_datas(cap["reply_markup"]["inline_keyboard"]) == [f"qc:{KEY}", f"u:{KEY}", f"t:{KEY}"]
+    assert r.named(HOOK) == []
+
+
+def test_typed_time_valid_past_far_and_garbage(tmp_path):
+    r = q_rig(tmp_path)
+    for text, want in (("garbage", "Use YYYY-MM-DD HH:MM"), ("2026-11-14 15:00", "in the past"),
+                       ("2027-02-01 10:00", "more than 60 days")):
+        press(r, f"qt:{KEY}")
+        assert "YYYY-MM-DD HH:MM (Asia/Kolkata)" in r.texts()[-1]
+        run(r.bot.handle_update(msg(text)))
+        assert want in r.texts()[-1] and "Schedule upload again" in r.texts()[-1]
+    assert rec_of(r)["state"] == ""
+    press(r, f"qt:{KEY}")
+    run(r.bot.handle_update(msg("2026-11-20 18:45")))
+    ask = last_json(r, "sendMessage")
+    assert ask["text"].startswith("Schedule upload for Fri 20 Nov 2026 18:45 Asia/Kolkata")
+    yes = ask["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+    assert yes == f"qy:{int(datetime(2026, 11, 20, 13, 15, tzinfo=timezone.utc).timestamp())}:{KEY}"
+    # The past check holds at Yes time too (a confirmation pressed too late).
+    r.clock[0] = datetime(2026, 11, 21, tzinfo=timezone.utc)
+    press(r, yes)
+    assert "past" in last_json(r, "answerCallbackQuery")["text"] and rec_of(r)["state"] == ""
+    assert tb.check_when(NOW + timedelta(days=60), NOW) is None
+    assert tb.check_when(NOW + timedelta(days=60, minutes=1), NOW)
+
+
+def test_schedule_persists_and_fires_the_exact_contract_once(tmp_path):
+    r = q_rig(tmp_path)
+    schedule_at(r, NOW + timedelta(hours=2))
+    r2 = q_rig(tmp_path, deliver=False)   # a restart: same state file
+    assert r2.bot.data["clips"][KEY]["state"] == "scheduled"
+    due(r2)
+    assert r2.named(HOOK) == []           # not due yet
+    r2.clock[0] = NOW + timedelta(hours=2, seconds=20)
+    due(r2)
+    due(r2)
+    (post,) = r2.named(HOOK)
+    assert post.headers["X-OpenShorts-Secret"] == SECRET
+    f = multipart_fields(post)
+    assert set(f) == {"video", "title", "description", "tags", "privacy", "job_id", "clip_index"}
+    assert f["video"] == b"MP4DATA" and f["title"] == b"Big title" and f["privacy"] == b"unlisted"
+    assert f["tags"] == b"ai,n8n" and f["job_id"] == JOB.encode() and f["clip_index"] == b"0"
+    assert r2.named(f"GET /api/status/{JOB}")   # fresh signed link from the API
+    cap = last_json(r2, "editMessageCaption")["caption"]
+    assert "✅ On YouTube: https://youtu.be/S" in cap and "late" not in cap
+
+
+def test_overdue_at_startup_runs_once_with_late_note(tmp_path):
+    r = q_rig(tmp_path)
+    schedule_at(r, NOW + timedelta(hours=1))
+    # Restarted three hours later: run() checks at once, before any tick.
+    r2 = q_rig(tmp_path, deliver=False, now=NOW + timedelta(hours=4))
+    stop = asyncio.Event()
+    ticks = []
+
+    async def tick(s):
+        ticks.append(s)
+        while r2.bot._tasks - {asyncio.current_task()}:
+            await asyncio.sleep(0)
+        stop.set()
+        await asyncio.sleep(3600)
+    r2.bot.tick_sleep = tick
+    polls = []
+    r2.routes["getUpdates"] = lambda req: (polls.append(1), len(polls) > 500 and stop.set(), ok([]))[2]
+
+    async def yielding(req):   # a sync mock never yields, so the poll loop would starve the scheduler
+        await asyncio.sleep(0)
+        return r2._handle(req)
+    r2.bot.client_factory = lambda: httpx.AsyncClient(transport=httpx.MockTransport(yielding))
+
+    async def go():
+        t = asyncio.create_task(r2.bot.run(stop))
+        await asyncio.wait_for(t, 5)
+    run(go())
+    assert ticks == [30]
+    assert len(r2.named(HOOK)) == 1
+    cap = last_json(r2, "editMessageCaption")["caption"]
+    assert "⏰ Ran late: it was scheduled for Sat 14 Nov 2026 16:30 Asia/Kolkata." in cap
+    assert "✅ On YouTube" in cap
+    due(r2)
+    assert len(r2.named(HOOK)) == 1
+
+
+def test_cancel_upload_now_and_edit_title_before_the_run(tmp_path):
+    r = q_rig(tmp_path)
+    schedule_at(r, NOW + timedelta(hours=1))
+    press(r, f"t:{KEY}")
+    run(r.bot.handle_update(msg("Newer title")))
+    assert "🗓 Scheduled for" in last_json(r, "editMessageCaption")["caption"]
+    press(r, f"qc:{KEY}")
+    cap = last_json(r, "editMessageCaption")
+    assert "Scheduled" not in cap["caption"] and rec_of(r)["state"] == "" and "at" not in rec_of(r)
+    assert kb_datas(cap["reply_markup"]["inline_keyboard"]) == [f"u:{KEY}", f"k:{KEY}", f"t:{KEY}", f"q:{KEY}"]
+    r.clock[0] = NOW + timedelta(hours=2)
+    due(r)
+    assert r.named(HOOK) == []            # cancelled: nothing runs
+    schedule_at(r, NOW + timedelta(hours=3))
+    press(r, f"u:{KEY}", wait=True)       # ⏫ Upload now
+    assert multipart_fields(r.named(HOOK)[0])["title"] == b"Newer title"
+    r.clock[0] = NOW + timedelta(hours=5)
+    due(r)
+    assert len(r.named(HOOK)) == 1
+
+
+def test_scheduled_upload_uses_the_latest_title(tmp_path):
+    r = q_rig(tmp_path)
+    schedule_at(r, NOW + timedelta(hours=1))
+    press(r, f"t:{KEY}")
+    run(r.bot.handle_update(msg("Title after scheduling")))
+    r.clock[0] = NOW + timedelta(hours=1)
+    due(r)
+    assert multipart_fields(r.named(HOOK)[0])["title"] == b"Title after scheduling"
+
+
+def test_no_double_upload_when_due_and_pressed(tmp_path):
+    r = q_rig(tmp_path)
+    schedule_at(r, NOW + timedelta(hours=1))
+    r.clock[0] = NOW + timedelta(hours=1)
+
+    async def go():
+        await r.bot.run_due()                       # due: the upload starts
+        await r.bot.handle_update(cb(f"u:{KEY}"))   # Upload now pressed meanwhile
+        await r.bot.run_due()                       # next tick
+        await r.bot.handle_update(cb(f"q:{KEY}"))
+        while r.bot._tasks:
+            await asyncio.gather(*list(r.bot._tasks))
+    run(go())
+    assert len(r.named(HOOK)) == 1
+    toasts = [json.loads(c.content).get("text") for c in r.named("answerCallbackQuery")]
+    assert toasts[-2:] == ["Already uploading, wait for it.", "Already uploading, wait for it."]
+
+
+def test_failed_scheduled_upload_offers_buttons_again(tmp_path):
+    r = q_rig(tmp_path)
+    r.routes[HOOK] = httpx.Response(200, json={"ok": False, "error": f"quota with {SECRET}"})
+    schedule_at(r, NOW + timedelta(hours=1))
+    r.clock[0] = NOW + timedelta(hours=1)
+    due(r)
+    cap = last_json(r, "editMessageCaption")
+    assert "Upload failed: quota" in cap["caption"] and SECRET not in cap["caption"]
+    assert kb_datas(cap["reply_markup"]["inline_keyboard"]) == [f"u:{KEY}", f"k:{KEY}", f"t:{KEY}", f"q:{KEY}"]
+    assert rec_of(r)["state"] == "failed"
+
+
+def test_scheduled_lists_both_kinds_and_cancels(tmp_path):
+    r = q_rig(tmp_path, upload_key="K", profile="prof")
+    r.routes["GET /api/social/scheduled"] = httpx.Response(200, json={"scheduled_posts": [
+        {"job_id": "aaaa1111", "platform": "tiktok", "scheduled_date": "2030-01-01T10:00:00"}]})
+    schedule_at(r, NOW + timedelta(hours=1))
+    run(r.bot.handle_update(msg("/scheduled")))
+    out = last_json(r, "sendMessage")
+    assert "1. Big title - Sat 14 Nov 2026 16:30 Asia/Kolkata" in out["text"]
+    assert "Upload-Post (id, platform, time):\naaaa1111  tiktok" in out["text"]
+    assert kb_datas(out["reply_markup"]["inline_keyboard"]) == [f"qx:{KEY}"]
+    press(r, f"qx:{KEY}")
+    assert rec_of(r)["state"] == ""
+    ed = last_json(r, "editMessageText")
+    assert "Big title" not in ed["text"] and "aaaa1111" in ed["text"]
+    assert last_json(r, "answerCallbackQuery")["text"] == "Schedule cancelled."
+
+
+def test_scheduled_without_upload_post_still_lists_youtube(tmp_path):
+    r = q_rig(tmp_path)
+    run(r.bot.handle_update(msg("/scheduled")))
+    assert r.texts()[-1] == "Nothing scheduled."
+    schedule_at(r, NOW + timedelta(hours=1))
+    run(r.bot.handle_update(msg("/scheduled")))
+    assert "1. Big title" in r.texts()[-1] and "UPLOAD_POST_API_KEY" not in r.texts()[-1]
+    assert r.named("GET /api/social/scheduled") == []
+
+
+def test_schedule_button_hidden_and_refused_when_uploads_off(tmp_path):
+    r = q_rig(tmp_path, n8n_url="")
+    assert "reply_markup" not in multipart_fields(r.named("sendVideo")[0])
+    press(r, f"q:{KEY}", f"qy:{int((NOW + timedelta(hours=1)).timestamp())}:{KEY}")
+    assert rec_of(r)["state"] == "" and r.named("editMessageReplyMarkup") == []
+    assert last_json(r, "answerCallbackQuery")["text"] == "Upload is off on this server."
+
+
+def test_schedule_callbacks_from_unlisted_sender_are_silent(tmp_path):
+    r = q_rig(tmp_path)
+    epoch = int((NOW + timedelta(hours=1)).timestamp())
+    r.calls.clear()
+    for data in (f"q:{KEY}", f"qa:h:{KEY}", f"qt:{KEY}", f"qb:{KEY}", f"qy:{epoch}:{KEY}",
+                 f"qn:{KEY}", f"qc:{KEY}", f"qx:{KEY}"):
+        run(r.bot.handle_update(cb(data, user=999)))
+        run(r.bot.handle_update(cb(data, chat=999)))
+    run(r.bot.handle_update(msg("/scheduled", user=999)))
+    assert r.calls == [] and rec_of(r)["state"] == ""
+    assert str(CHAT) not in r.bot.data["awaiting"]

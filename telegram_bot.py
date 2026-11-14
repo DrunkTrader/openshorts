@@ -13,7 +13,7 @@ import os
 import random
 import re
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 from urllib.parse import urlsplit
 
@@ -45,7 +45,9 @@ HELP = (
     "/schedule <job> <clip#> <platforms> <YYYY-MM-DD HH:MM> - schedule a clip "
     "(platforms: tiktok,instagram,youtube; job is the short id from Queued)\n"
     "/jobs - queued and running jobs, each with a 🛑 cancel button\n"
-    "/scheduled - list scheduled posts\n"
+    "🗓 Schedule upload (under each clip) - send it to YouTube later; times are in "
+    "TELEGRAM_TIMEZONE\n"
+    "/scheduled - list scheduled YouTube uploads (each with ❌ cancel) and Upload-Post posts\n"
     "/cancel <id> - cancel a scheduled post (to cancel a job, use /jobs or its 🛑 button)\n"
     "/help - this text"
 )
@@ -79,6 +81,12 @@ TITLE_CHARS = 100
 MAX_OFFSET = 36000   # slot_split.MAX_OFFSET_SECONDS
 _ID_RE = re.compile(r"^[0-9a-f]{32}$")   # a library item id
 _JOB_RE = re.compile(r"^[A-Za-z0-9-]{1,48}$")
+MAX_AHEAD = timedelta(days=60)      # scheduled uploads: furthest ahead
+LATE_AFTER = timedelta(minutes=2)   # a due upload started later than this says it ran late
+TICK_SECONDS = 30                   # scheduler check interval
+# Quick choices of the schedule menu: code -> (label, days from today, hour); "h" is now + 1 h.
+QUICK = {"h": ("in 1 hour", None, None), "e": ("today 20:00", 0, 20),
+         "m": ("tomorrow 09:00", 1, 9), "a": ("tomorrow 18:00", 1, 18)}
 
 
 def parse_offset(text) -> Optional[str]:
@@ -187,16 +195,42 @@ def extract_url(text: str) -> Optional[str]:
     return m.group(0).rstrip(".,;)") if m else None
 
 
-def parse_when(text: str, tz: str = "UTC"):
-    """(aware datetime, tz name actually used). Falls back to UTC when the zone
-    database has no such zone (Windows without tzdata). ValueError on bad text."""
+def _zone(tz: str):
+    """(tzinfo, name actually used): UTC when the zone database has no such zone
+    (Windows without tzdata)."""
     from zoneinfo import ZoneInfo
-    naive = datetime.strptime(text.strip(), "%Y-%m-%d %H:%M")
     try:
-        zone, used = ZoneInfo(tz), tz
+        return ZoneInfo(tz), tz
     except Exception:
-        zone, used = timezone.utc, "UTC"
+        return timezone.utc, "UTC"
+
+
+def parse_when(text: str, tz: str = "UTC"):
+    """(aware datetime, tz name actually used). ValueError on bad text."""
+    naive = datetime.strptime(text.strip(), "%Y-%m-%d %H:%M")
+    zone, used = _zone(tz)
     return naive.replace(tzinfo=zone), used
+
+
+def quick_time(code, now, tz="UTC") -> Optional[datetime]:
+    """The UTC instant of a schedule-menu quick choice, days counted in ``tz``."""
+    if code not in QUICK:
+        return None
+    _, days, hour = QUICK[code]
+    if days is None:
+        return now + timedelta(hours=1)
+    zone, _ = _zone(tz)
+    d = now.astimezone(zone).date() + timedelta(days=days)
+    return datetime(d.year, d.month, d.day, hour, tzinfo=zone).astimezone(timezone.utc)
+
+
+def check_when(when, now) -> Optional[str]:
+    """Why ``when`` cannot be a scheduled upload time, or None."""
+    if when <= now:
+        return "That time is in the past."
+    if when > now + MAX_AHEAD:
+        return "That is more than 60 days away."
+    return None
 
 
 class IntakeBot:
@@ -212,6 +246,8 @@ class IntakeBot:
         self.send_files, self.public_url = send_files, public_url.rstrip("/")
         self.n8n_url, self.n8n_secret = n8n_url, n8n_secret
         self.sleep = asyncio.sleep
+        self.tick_sleep = asyncio.sleep               # scheduler loop (tests inject both)
+        self.now = lambda: datetime.now(timezone.utc)
         self.offset = 0
         self.jobs: dict = {}      # str(chat_id) -> last 20 job ids
         self.data = {k: {} for k in STATE_KEYS}
@@ -242,7 +278,8 @@ class IntakeBot:
             os.makedirs(os.path.dirname(os.path.abspath(self.state_path)), exist_ok=True)
             for key, cap in (("job_settings", 200), ("clips", 500)):
                 for old in list(self.data[key])[:-cap]:
-                    del self.data[key][old]
+                    if self.data[key][old].get("state") != "scheduled":   # never drop a pending upload
+                        del self.data[key][old]
             jsonfile.write_json_atomic(self.state_path,
                                        {"offset": self.offset, "jobs": self.jobs, **self.data})
         except Exception as e:
@@ -514,8 +551,8 @@ class IntakeBot:
     async def _on_callback(self, c, chat_id, mid, data):
         """Returns the toast text for answerCallbackQuery (or None)."""
         head, _, arg = data.partition(":")
-        if head in ("u", "k", "t"):
-            return await self._clip_action(c, chat_id, head, arg)
+        if head in ("u", "k", "t", "q", "qa", "qt", "qb", "qy", "qn", "qc", "qx"):
+            return await self._clip_action(c, chat_id, mid, head, arg)
         if head == "ow":
             return await self._confirm_overwrite(c, chat_id, mid, arg == "y")
         if head == "lx":
@@ -622,6 +659,8 @@ class IntakeBot:
     async def _answer_prompt(self, c, chat_id, waiting, text):
         if waiting.get("kind") == "title":
             return await self._set_title(c, chat_id, waiting.get("key"), text)
+        if waiting.get("kind") == "when":
+            return await self._typed_when(c, chat_id, waiting.get("key"), text)
         panel = self._panels(chat_id).get(waiting.get("panel") or "")
         if panel is None:
             return await self._say(c, chat_id, "That panel is gone; nothing saved.")
@@ -963,15 +1002,25 @@ class IntakeBot:
         return None
 
     # --- approval and upload (n8n) -------------------------------------
-    @staticmethod
-    def clip_text(rec) -> str:
+    def _local(self, when) -> str:
+        """A UTC datetime (or its ISO text) as local time with the weekday."""
+        if isinstance(when, str):
+            when = datetime.fromisoformat(when)
+        zone, used = _zone(self.tz)
+        return when.astimezone(zone).strftime("%a %d %b %Y %H:%M ") + used
+
+    def clip_text(self, rec) -> str:
         out = f"{rec['i'] + 1}. {rec['title']}"
         if rec.get("note"):
             out += f"\n{rec['note']}"
         if rec.get("link"):
             out += f"\n{rec['link']}"
+        if rec.get("late"):
+            out += f"\n{rec['late']}"
         st = rec.get("state")
-        if st == "uploading":
+        if st == "scheduled":
+            out += f"\n🗓 Scheduled for {self._local(rec['at'])}"
+        elif st == "uploading":
             out += "\n⏳ Uploading…"
         elif st == "uploaded":
             out += f"\n✅ On YouTube: {rec.get('youtube_url') or '?'} (Drive: {rec.get('drive_link') or '?'})"
@@ -986,8 +1035,17 @@ class IntakeBot:
         if not self.n8n_url or rec.get("state") in ("uploading", "uploaded", "skipped"):
             return []
         k = f"{job_id}:{i}"
+        if rec.get("state") == "scheduled":
+            return [[_btn("❌ Cancel schedule", f"qc:{k}"), _btn("⏫ Upload now", f"u:{k}")],
+                    [_btn("✏️ Edit title", f"t:{k}")]]
         return [[_btn("✅ Upload to YouTube", f"u:{k}"), _btn("⏭ Skip", f"k:{k}")],
-                [_btn("✏️ Edit title", f"t:{k}")]]
+                [_btn("✏️ Edit title", f"t:{k}"), _btn("🗓 Schedule upload", f"q:{k}")]]
+
+    def schedule_keyboard(self, key, now):
+        # callback_data "qa:<code>:<key>"; "today 20:00" only while it is still ahead.
+        return [[_btn(label, f"qa:{code}:{key}")] for code, (label, _, _) in QUICK.items()
+                if quick_time(code, now, self.tz) > now] + [
+            [_btn("⌨️ Type date/time", f"qt:{key}")], [_btn("« Back", f"qb:{key}")]]
 
     async def _show_clip(self, c, key, rec):
         job_id = key.rsplit(":", 1)[0]
@@ -1001,7 +1059,9 @@ class IntakeBot:
                 "chat_id": rec["chat"], "message_id": rec["msg"],
                 "text": self.clip_text(rec)[:4000], "reply_markup": markup})
 
-    async def _clip_action(self, c, chat_id, head, key):
+    async def _clip_action(self, c, chat_id, mid, head, arg):
+        # "qa" and "qy" carry "<choice or epoch>:<job id>:<index>", the others the key alone.
+        extra, key = arg.partition(":")[::2] if head in ("qa", "qy") else ("", arg)
         rec = self.data["clips"].get(key)
         if rec is None or rec.get("chat") != chat_id:
             return "I do not know that clip any more."
@@ -1009,8 +1069,11 @@ class IntakeBot:
             return f"Already uploaded: {rec.get('youtube_url') or ''}".strip()
         if rec.get("state") == "uploading":
             return "Already uploading, wait for it."
+        if head.startswith("q"):
+            return await self._schedule_action(c, chat_id, mid, head, extra, key, rec)
         if head == "k":
             rec["state"] = "skipped"
+            rec.pop("at", None)
         elif head == "t":
             self.data["awaiting"][str(chat_id)] = {"kind": "title", "key": key}
             self._save()
@@ -1020,11 +1083,130 @@ class IntakeBot:
         else:
             if not self.n8n_url:
                 return "Upload is off on this server."
-            rec["state"] = "uploading"
+            rec["state"] = "uploading"   # also "⏫ Upload now" on a scheduled clip
+            rec.pop("at", None)
             self._spawn(self._upload(key))
         self._save()
         await self._show_clip(c, key, rec)
         return "Uploading…" if head == "u" else "Skipped."
+
+    # --- scheduled YouTube uploads ------------------------------------
+    # One state per clip: "" -> scheduled -> uploading -> uploaded | failed. The
+    # scheduler sends the same n8n request as the button (_upload), at rec["at"].
+    async def _schedule_action(self, c, chat_id, mid, head, extra, key, rec):
+        if not self.n8n_url:
+            return "Upload is off on this server."
+        if head == "q":
+            if rec.get("state") == "scheduled":
+                return "Already scheduled. Cancel the schedule first."
+            await self._keys(c, rec["chat"], rec["msg"], self.schedule_keyboard(key, self.now()))
+        elif head == "qb":
+            await self._show_clip(c, key, rec)
+        elif head == "qt":
+            self.data["awaiting"][str(chat_id)] = {"kind": "when", "key": key}
+            self._save()
+            await self._say(c, chat_id, f"Send the upload time for clip {rec['i'] + 1} as "
+                                        f"YYYY-MM-DD HH:MM ({_zone(self.tz)[1]}).")
+        elif head == "qa":
+            when = quick_time(extra, self.now(), self.tz)
+            if when is None:
+                return None
+            await self._show_clip(c, key, rec)   # the menu goes back to the normal buttons
+            return await self._ask_schedule(c, chat_id, key, rec, when)
+        elif head == "qn":
+            await self._edit(c, chat_id, mid, "Not scheduled.")
+            return "Not scheduled."
+        elif head == "qy":
+            try:
+                when = datetime.fromtimestamp(int(extra), timezone.utc)
+            except (ValueError, OverflowError, OSError):
+                return None
+            if (err := check_when(when, self.now())):
+                await self._edit(c, chat_id, mid, f"Not scheduled: {err}")
+                return err
+            rec.update(state="scheduled", at=when.isoformat())
+            rec.pop("late", None)
+            self._save()
+            await self._show_clip(c, key, rec)
+            await self._edit(c, chat_id, mid, f"🗓 Scheduled clip {rec['i'] + 1} for {self._local(when)}.")
+            return "Scheduled."
+        elif head in ("qc", "qx"):
+            if rec.get("state") != "scheduled":
+                return "That clip is not scheduled."
+            rec["state"] = ""
+            rec.pop("at", None)
+            rec.pop("late", None)
+            self._save()
+            await self._show_clip(c, key, rec)
+            if head == "qx":   # pressed in the /scheduled list: redraw it
+                text, markup = await self._scheduled_view(c, chat_id)
+                await self._edit(c, chat_id, mid, text, markup)
+            return "Schedule cancelled."
+        return None
+
+    async def _ask_schedule(self, c, chat_id, key, rec, when):
+        """Send the Yes/No confirmation; returns the reason when ``when`` is refused."""
+        if (err := check_when(when, self.now())):
+            return err
+        priv = clean_settings(self.data["job_settings"].get(key.rsplit(":", 1)[0]))["priv"]
+        epoch = int(when.timestamp())
+        await self._say(c, chat_id, f"Schedule upload for {self._local(when)} (privacy: {priv})?\n"
+                                    f"Clip {rec['i'] + 1}: {rec['title']}",
+                        [[_btn("✅ Yes", f"qy:{epoch}:{key}"), _btn("✖️ No", f"qn:{key}")]])
+        return None
+
+    async def _typed_when(self, c, chat_id, key, text):
+        rec = self.data["clips"].get(key or "")
+        if rec is None or rec.get("chat") != chat_id:
+            return await self._say(c, chat_id, "I do not know that clip any more.")
+        again = " Press 🗓 Schedule upload again."
+        try:
+            when = parse_when(text, self.tz)[0].astimezone(timezone.utc)
+        except ValueError:
+            return await self._say(c, chat_id, "Use YYYY-MM-DD HH:MM, for example 2030-01-31 18:00." + again)
+        if rec.get("state") in ("uploading", "uploaded"):
+            return await self._say(c, chat_id, "That clip is already uploaded.")
+        if (err := await self._ask_schedule(c, chat_id, key, rec, when)):
+            await self._say(c, chat_id, err + again)
+
+    async def run_due(self):
+        """Start every scheduled upload whose time has come, including the ones
+        missed while the server was down (those say they ran late)."""
+        if not self.n8n_url:
+            return
+        now = self.now()
+        due = []
+        for key, rec in self.data["clips"].items():
+            if rec.get("state") != "scheduled":
+                continue
+            try:
+                at = datetime.fromisoformat(rec.get("at") or "")
+                late = now - at > LATE_AFTER
+                ready = at <= now
+            except (TypeError, ValueError):   # unreadable time: run it rather than keep it forever
+                at, late, ready = None, False, True
+            if ready:
+                # Moved off "scheduled" before any await: no second tick or press can start it.
+                rec["state"] = "uploading"
+                rec.pop("at", None)
+                if late:
+                    rec["late"] = f"⏰ Ran late: it was scheduled for {self._local(at)}."
+                due.append(key)
+        if not due:
+            return
+        self._save()
+        async with self.client_factory() as c:
+            for key in due:
+                await self._show_clip(c, key, self.data["clips"][key])
+                self._spawn(self._upload(key))
+
+    async def _scheduler(self, stop, is_active):
+        while not stop.is_set() and is_active():
+            try:
+                await self.run_due()
+            except Exception as e:
+                log.warning("scheduler failed: %s", self._safe(e))
+            await self.tick_sleep(TICK_SECONDS)
 
     async def _set_title(self, c, chat_id, key, text):
         rec = self.data["clips"].get(key or "")
@@ -1168,7 +1350,7 @@ class IntakeBot:
             dt, used = parse_when(when, self.tz)
         except ValueError:
             return await self._say(c, chat_id, usage)
-        if dt <= datetime.now(timezone.utc):
+        if dt <= self.now():
             return await self._say(c, chat_id, "That time is in the past.")
         status, body = await self._api(
             c, "POST", "/api/social/post",
@@ -1187,17 +1369,30 @@ class IntakeBot:
         return status, body, sorted((body.get("scheduled_posts") or []) if status == 200 else [],
                                     key=lambda r: r.get("scheduled_date") or "")
 
+    async def _scheduled_view(self, c, chat_id):
+        """(text, markup): this chat's scheduled YouTube uploads, then the
+        Upload-Post posts when Upload-Post is configured."""
+        mine = sorted(((k, r) for k, r in self.data["clips"].items()
+                       if r.get("state") == "scheduled" and r.get("chat") == chat_id),
+                      key=lambda kr: kr[1].get("at") or "")
+        parts, markup = [], []
+        if mine:
+            parts.append("YouTube uploads (tap ❌ to cancel):\n" + "\n".join(
+                f"{n + 1}. {r['title']} - {self._local(r['at'])}" for n, (_, r) in enumerate(mine)))
+            markup = [[_btn(f"❌ {n + 1}. {r['title'][:30]}", f"qx:{k}")] for n, (k, r) in enumerate(mine)]
+        if self._need_profile() is None:
+            status, body, rows = await self._rows(c)
+            if status != 200:
+                parts.append(f"Upload-Post: could not list: {self._detail(body)}")
+            elif rows:
+                parts.append("Upload-Post (id, platform, time):\n" + "\n".join(
+                    f"{str(r.get('job_id', ''))[-8:]}  {r.get('platform') or ','.join(r.get('platforms') or [])}  "
+                    f"{r.get('scheduled_date', '')}" for r in rows))
+        return "\n\n".join(parts) or "Nothing scheduled.", markup or None
+
     async def _scheduled(self, c, chat_id, rest):
-        if (err := self._need_profile()):
-            return await self._say(c, chat_id, err)
-        status, body, rows = await self._rows(c)
-        if status != 200:
-            return await self._say(c, chat_id, f"Could not list: {self._detail(body)}")
-        if not rows:
-            return await self._say(c, chat_id, "Nothing scheduled.")
-        lines = [f"{str(r.get('job_id', ''))[-8:]}  {r.get('platform') or ','.join(r.get('platforms') or [])}  "
-                 f"{r.get('scheduled_date', '')}" for r in rows]
-        await self._say(c, chat_id, "Scheduled (id, platform, time):\n" + "\n".join(lines))
+        text, markup = await self._scheduled_view(c, chat_id)
+        await self._say(c, chat_id, text, markup)
 
     async def _cancel(self, c, chat_id, rest):
         if (err := self._need_profile()):
@@ -1219,6 +1414,7 @@ class IntakeBot:
     async def run(self, stop: asyncio.Event, is_active: Callable[[], bool] = lambda: True):
         """Never raises. Stops when `stop` is set or the instance drains."""
         delay, conflict_logged = 1.0, False
+        self._spawn(self._scheduler(stop, is_active))   # first check now: runs uploads missed while down
         try:
             async with self.client_factory() as c:
                 while not stop.is_set() and is_active():
