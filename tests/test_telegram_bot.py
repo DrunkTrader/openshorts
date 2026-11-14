@@ -48,8 +48,8 @@ class Rig:
         return [json.loads(c.content)["text"] for c in self.named("sendMessage")]
 
 
-def msg(text=None, chat=CHAT, **extra):
-    m = {"chat": {"id": chat}}
+def msg(text=None, chat=CHAT, user=None, **extra):
+    m = {"chat": {"id": chat}, "from": {"id": chat if user is None else user}}
     if text is not None:
         m["text"] = text
     m.update(extra)
@@ -174,7 +174,11 @@ def _every_button(bot, job_id):
     boards = [bot.panel_keyboard(s), bot.presets_keyboard(CHAT),
               bot.clip_keyboard(job_id, 99, {"state": ""}),
               [[tb._btn("y", "ow:y"), tb._btn("n", "ow:n")]]]
-    boards += [bot.option_keyboard(s, k) for k in tb.OPTIONS]
+    boards += [bot.option_keyboard(s, k) for k in {**tb.OPTIONS, **tb.SPLIT_OPTIONS}]
+    long_items = [{"id": c * 32, "name": "é" * 80} for c in "0123456789abcdef"]
+    s_on = {**s, "spl": "on", "src": {"id": "f" * 32, "name": "é" * 64}}
+    boards += [bot.split_keyboard(s_on), bot.split_keyboard(s), bot.source_keyboard(),
+               bot.pick_keyboard(long_items), bot.library_keyboard(long_items), bot.panel_keyboard(s_on)]
     return [b for board in boards for row in board for b in row]
 
 
@@ -183,7 +187,7 @@ def test_callback_data_fits_64_bytes(tmp_path):
     r.bot._presets_of(CHAT)[tb.preset_name("é" * 40)] = dict(tb.DEFAULTS)
     r.bot._presets_of(CHAT)[tb.preset_name("x" * 80)] = dict(tb.DEFAULTS)
     buttons = _every_button(r.bot, "0123456789abcdef0123456789abcdef0123")
-    assert len(buttons) > 40
+    assert len(buttons) > 80
     for b in buttons:
         assert len(b["callback_data"].encode()) <= 64, b
 
@@ -677,3 +681,265 @@ def test_upload_disabled_when_webhook_secret_missing(monkeypatch, tmp_path):
     assert seen["url"] == ""
     asyncio.run(tb.run_from_env(env={**base, "N8N_WEBHOOK_SECRET": "s3cret"}))
     assert seen["url"] == "http://127.0.0.1:9/hook"
+
+
+# --- split screen -------------------------------------------------------------
+LIB_ID, LIB_ID2 = "a" * 32, "b" * 32
+LIB = {"items": [{"id": LIB_ID, "name": "Gameplay", "duration": 30.0, "has_audio": True},
+                 {"id": LIB_ID2, "name": "Rain", "duration": 12.0, "has_audio": False}]}
+
+
+def send(rig, update, wait=True):
+    """One update; background tasks awaited (wait) or cancelled."""
+    async def go():
+        await rig.bot.handle_update(update)
+        while wait and rig.bot._tasks:
+            await asyncio.gather(*list(rig.bot._tasks))
+        for t in list(rig.bot._tasks):
+            t.cancel()
+    run(go())
+
+
+def panel_s(rig, mid="7"):
+    return rig.bot.data["panels"][str(CHAT)][mid]["s"]
+
+
+def kb_datas(markup):
+    return [b["callback_data"] for row in markup for b in row]
+
+
+def test_split_submenu_forces_vertical_and_needs_a_source(rig):
+    rig.routes["GET /api/slot-uploads"] = httpx.Response(200, json=LIB)
+    run(rig.bot.handle_update(msg("https://youtu.be/abc")))
+    assert "Split screen: off" in rig.texts()[-1]
+    press(rig, "s:fmt:square", "m:spl")
+    datas = kb_datas(last_json(rig, "editMessageReplyMarkup")["reply_markup"]["inline_keyboard"])
+    assert {"s:spl:off", "s:spl:on", "m:src", "m:pos", "m:rat", "m:aud", "m:off", "m:"} <= set(datas)
+    press(rig, "s:spl:on")
+    ed = last_json(rig, "editMessageText")
+    assert "Format: vertical (split screen needs it)" in ed["text"]
+    assert "Split screen: on, extra video not picked yet at the bottom" in ed["text"]
+    assert panel_s(rig)["fmt"] == "vertical"
+    press(rig, "s:fmt:horizontal")
+    assert "needs vertical" in last_json(rig, "answerCallbackQuery")["text"]
+    assert panel_s(rig)["fmt"] == "vertical"
+    press(rig, "go")
+    assert "Pick the extra video" in last_json(rig, "answerCallbackQuery")["text"]
+    assert rig.named("POST /api/process") == []
+    # Position / ratio / audio / offset menus, and their Back goes to the split menu.
+    press(rig, "m:off")
+    datas = kb_datas(last_json(rig, "editMessageReplyMarkup")["reply_markup"]["inline_keyboard"])
+    assert datas == ["s:off:0", "s:off:10", "s:off:30", "s:off:60", "sw:o", "m:spl"]
+    press(rig, "s:pos:top", "s:rat:60/40", "s:aud:mix", "s:off:30", "s:rat:70/30")
+    assert {k: panel_s(rig)[k] for k in ("pos", "rat", "aud", "off")} == {
+        "pos": "top", "rat": "60/40", "aud": "mix", "off": "30"}
+
+
+def test_typed_offset_is_validated(rig):
+    run(rig.bot.handle_update(msg("https://youtu.be/abc")))
+    press(rig, "sw:o")
+    run(rig.bot.handle_update(msg("-3")))
+    assert "not a number" in rig.texts()[-1] and panel_s(rig)["off"] == "0"
+    press(rig, "sw:o")
+    run(rig.bot.handle_update(msg("12.50")))
+    assert panel_s(rig)["off"] == "12.5" and "12.5 s" in rig.texts()[-1]
+    assert tb.parse_offset("nan") is None and tb.parse_offset("1e9") is None
+
+
+def test_library_source_preset_and_deleted_item(tmp_path):
+    rig = Rig(tmp_path)
+    rig.routes["GET /api/slot-uploads"] = httpx.Response(200, json=LIB)
+    run(rig.bot.handle_update(msg("https://youtu.be/abc")))
+    press(rig, "s:spl:on", "m:src")
+    assert kb_datas(last_json(rig, "editMessageReplyMarkup")["reply_markup"]["inline_keyboard"]) == [
+        "sl", "sw:v", "sw:u", "m:spl"]
+    press(rig, "sl")
+    assert kb_datas(last_json(rig, "editMessageReplyMarkup")["reply_markup"]["inline_keyboard"]) == [
+        f"sp:{LIB_ID}", f"sp:{LIB_ID2}", "m:src"]
+    press(rig, f"sp:{LIB_ID}", "s:rat:60/40", "sv")
+    run(rig.bot.handle_update(msg("gp")))
+    saved = rig.bot.data["presets"][str(CHAT)]["gp"]
+    assert saved["src"] == {"id": LIB_ID, "name": "Gameplay"} and saved["spl"] == "on"
+    assert set(saved) == set(tb.DEFAULTS)  # an id and a name, never file bytes
+    run(rig.bot.handle_update(msg("/preset_default gp")))
+    # Still in the library: split stays on.
+    run(rig.bot.handle_update(msg("https://youtu.be/two")))
+    assert "Split screen: on, extra video Gameplay at the bottom, 60/40" in rig.texts()[-1]
+    # Deleted since: the panel says so and split is off for this run only.
+    rig.routes["GET /api/slot-uploads"] = httpx.Response(200, json={"items": []})
+    run(rig.bot.handle_update(msg("https://youtu.be/three")))
+    text = rig.texts()[-1]
+    assert "no longer in the library" in text and "Split screen: off" in text
+    assert rig.bot.data["presets"][str(CHAT)]["gp"]["spl"] == "on"
+    # Loading the preset on a panel checks again.
+    press(rig, "l:gp")
+    assert "no longer in the library" in last_json(rig, "editMessageText")["text"]
+    # A picked item gone since the list was shown.
+    press(rig, f"sp:{LIB_ID}")
+    assert "gone" in last_json(rig, "answerCallbackQuery")["text"]
+
+
+def _tg_file(rig, size=100):
+    rig.routes["getFile"] = ok({"file_path": "videos/f.mp4"})
+    rig.routes["f.mp4"] = httpx.Response(200, content=b"x" * size)  # Telegram routes key on the last segment
+
+
+def test_sent_video_becomes_the_extra_source(rig):
+    _tg_file(rig)
+    rig.routes["POST /api/slot-uploads"] = httpx.Response(200, json={"id": LIB_ID2, "name": "loop"})
+    run(rig.bot.handle_update(msg("https://youtu.be/abc")))
+    press(rig, "s:spl:on", "sw:v")
+    assert "20 MB" in rig.texts()[-1]
+    run(rig.bot.handle_update(msg(video={"file_id": "f", "file_size": 21 * 1024 * 1024})))
+    assert "over 20 MB" in rig.texts()[-1] and rig.named("getFile") == []
+    press(rig, "sw:v")
+    run(rig.bot.handle_update(msg(video={"file_id": "f", "file_size": 100, "file_name": "loop.mp4"})))
+    up = rig.named("POST /api/slot-uploads")[0]
+    f = multipart_fields(up)
+    assert f["name"] == b"loop" and f["file"] == b"x" * 100
+    assert b'filename="telegram.mp4"' in up.content
+    assert panel_s(rig)["src"] == {"id": LIB_ID2, "name": "loop"}
+    assert len(rig.bot.data["panels"][str(CHAT)]) == 1  # no second panel for the video
+    assert rig.named("POST /api/process") == []
+
+
+def test_link_goes_to_the_api_and_the_bot_never_fetches_it(rig):
+    rig.routes["POST /api/slot-uploads"] = httpx.Response(200, json={"id": LIB_ID, "name": "Some title"})
+    run(rig.bot.handle_update(msg("https://youtu.be/abc")))
+    press(rig, "s:spl:on", "sw:u")
+    rig.calls.clear()
+    send(rig, msg("here https://www.youtube.com/watch?v=extra1"))
+    hosts = {c.url.host for c in rig.calls}
+    assert hosts <= {"api.telegram.org", "127.0.0.1"}
+    (up,) = rig.named("POST /api/slot-uploads")
+    assert form(up) == {"url": "https://www.youtube.com/watch?v=extra1"}
+    assert panel_s(rig)["src"] == {"id": LIB_ID, "name": "Some title"}
+    assert len(rig.bot.data["panels"][str(CHAT)]) == 1  # the link did not open a new panel
+    assert "Extra video ready: Some title" in rig.texts()[-1]
+    # A refusal is reported.
+    rig.routes["POST /api/slot-uploads"] = httpx.Response(400, json={"detail": "This link is a playlist."})
+    press(rig, "sw:u")
+    send(rig, msg("https://www.youtube.com/playlist?list=x"))
+    assert "Could not use that link: This link is a playlist." in rig.texts()[-1]
+
+
+def test_library_lists_imports_and_deletes(rig):
+    rig.routes["POST /api/slot-uploads/import"] = httpx.Response(
+        200, json={"imported": ["new.mp4"], "skipped": ["bad.mp4"]})
+    rig.routes["GET /api/slot-uploads"] = httpx.Response(200, json=LIB)
+    run(rig.bot.handle_update(msg("/library")))
+    assert [c.url.path for c in rig.calls if "127.0.0.1" in c.url.host] == [
+        "/api/slot-uploads/import", "/api/slot-uploads"]
+    out = last_json(rig, "sendMessage")
+    assert "Imported from the folder: new.mp4" in out["text"] and "bad.mp4" in out["text"]
+    assert "1. Gameplay (30 s)" in out["text"] and "2. Rain (12 s)" in out["text"]
+    assert kb_datas(out["reply_markup"]["inline_keyboard"]) == [f"lx:{LIB_ID}", f"lx:{LIB_ID2}"]
+    rig.routes[f"DELETE /api/slot-uploads/{LIB_ID}"] = httpx.Response(200, json={"success": True})
+    rig.routes["GET /api/slot-uploads"] = httpx.Response(200, json={"items": LIB["items"][1:]})
+    press(rig, f"lx:{LIB_ID}")
+    assert len(rig.named(f"DELETE /api/slot-uploads/{LIB_ID}")) == 1
+    ed = last_json(rig, "editMessageText")
+    assert "Gameplay" not in ed["text"] and "Rain" in ed["text"]
+    assert last_json(rig, "answerCallbackQuery")["text"] == "Deleted."
+    press(rig, "lx:../../etc")
+    assert not [c for c in rig.calls if c.method == "DELETE" and "etc" in str(c.url)]
+
+
+def test_save_caption_adds_to_library(rig):
+    _tg_file(rig)
+    rig.routes["POST /api/slot-uploads"] = httpx.Response(200, json={"id": LIB_ID, "name": "My Loop"})
+    run(rig.bot.handle_update(msg(video={"file_id": "f", "file_size": 100}, caption="/save  My/Loop!")))
+    assert multipart_fields(rig.named("POST /api/slot-uploads")[0])["name"] == b"MyLoop"
+    assert rig.texts()[-1] == "Saved My Loop in the library."
+    assert rig.bot.data["panels"].get(str(CHAT), {}) == {}
+    run(rig.bot.handle_update(msg(video={"file_id": "f", "file_size": 100}, caption="/save !!")))
+    assert "Add a name" in rig.texts()[-1]
+
+
+def test_new_messages_and_callbacks_from_unlisted_sender_are_silent(rig):
+    send(rig, msg("/library", user=999))
+    send(rig, msg("https://youtu.be/abc", user=999))
+    run(rig.bot.handle_update(msg(video={"file_id": "f", "file_size": 1}, caption="/save x", user=999)))
+    for data in ("sl", f"sp:{LIB_ID}", "sw:u", f"lx:{LIB_ID}", "m:spl", "s:spl:on"):
+        run(rig.bot.handle_update(cb(data, user=999)))
+        run(rig.bot.handle_update(cb(data, chat=999)))
+    assert rig.calls == []
+
+
+SPLIT_JOB = "splitjob-1"
+PLAIN = {"video_url": f"/videos/{SPLIT_JOB}/a.mp4", "video_title_for_youtube_short": "T"}
+SPLIT = {"video_url": f"/videos/{SPLIT_JOB}/recut_1_x_a.mp4", "video_title_for_youtube_short": "T"}
+
+
+def split_rig(tmp_path, split_response=None, **settings):
+    r = Rig(tmp_path, send_files=True, n8n_url=N8N, n8n_secret=SECRET)
+    done = {"split": False}
+
+    def do_split(req):
+        if split_response is not None:
+            return split_response
+        done["split"] = True
+        return httpx.Response(200, json={"success": True, "new_video_url": SPLIT["video_url"]})
+    r.routes["POST /api/clip/split"] = do_split
+    r.routes[f"GET /api/status/{SPLIT_JOB}"] = lambda req: status(
+        "completed", [SPLIT if done["split"] else PLAIN])
+    r.routes[f"GET {PLAIN['video_url']}"] = httpx.Response(200, content=b"PLAINDATA")
+    r.routes[f"GET {SPLIT['video_url']}"] = httpx.Response(200, content=b"SPLITDATA")
+    r.bot.data["job_settings"][SPLIT_JOB] = tb.clean_settings({
+        **tb.DEFAULTS, "spl": "on", "src": {"id": LIB_ID, "name": "Gameplay"}, "off": "10", **settings})
+    return r
+
+
+@pytest.mark.parametrize("pos,rat,top,bottom,ratio", [
+    ("bottom", "50/50", "source", "upload", "50/50"),
+    ("bottom", "60/40", "source", "upload", "60/40"),
+    ("top", "50/50", "upload", "source", "50/50"),
+    ("top", "60/40", "upload", "source", "40/60"),  # 60% stays on the main clip
+])
+def test_split_applied_after_completion_with_exact_body(tmp_path, pos, rat, top, bottom, ratio):
+    r = split_rig(tmp_path, pos=pos, rat=rat, aud="extra")
+    run(r.bot.track(CHAT, SPLIT_JOB, 7))
+    body = json.loads(r.named("POST /api/clip/split")[0].content)
+    extra = {"kind": "upload", "upload_id": LIB_ID, "offset_s": 10.0}
+    assert body == {"job_id": SPLIT_JOB, "clip_index": 0, "slots": {
+        "top": extra if top == "upload" else {"kind": "source"},
+        "bottom": extra if bottom == "upload" else {"kind": "source"},
+        "ratio": ratio, "audio": "upload", "loop": True}}
+    assert multipart_fields(r.named("sendVideo")[0])["video"] == b"SPLITDATA"
+    # Approval and the n8n upload use the split file.
+    r.routes["POST /webhook/abc-secret-path"] = httpx.Response(200, json={"ok": True, "youtube_url": "y"})
+    press(r, f"u:{SPLIT_JOB}:0", wait=True)
+    assert multipart_fields(r.named("POST /webhook/abc-secret-path")[0])["video"] == b"SPLITDATA"
+
+
+def test_split_failure_sends_plain_clip_with_short_note(tmp_path):
+    r = split_rig(tmp_path, split_response=httpx.Response(
+        500, json={"detail": "ffmpeg failed: /srv/app/output/x " + TOKEN}))
+    run(r.bot.track(CHAT, SPLIT_JOB, 7))
+    sent = multipart_fields(r.named("sendVideo")[0])
+    assert sent["video"] == b"PLAINDATA"
+    cap = sent["caption"].decode()
+    assert "Split screen failed (the render failed), so this is the plain clip." in cap
+    assert "/srv" not in cap and TOKEN not in cap
+    # A 4xx detail is safe to show.
+    r2 = split_rig(tmp_path / "b", split_response=httpx.Response(
+        404, json={"detail": "Upload not found in your library"}))
+    run(r2.bot.track(CHAT, SPLIT_JOB, 7))
+    assert "Upload not found in your library" in multipart_fields(r2.named("sendVideo")[0])["caption"].decode()
+
+
+def test_split_off_job_never_calls_split(tmp_path):
+    r = split_rig(tmp_path, spl="off")
+    run(r.bot.track(CHAT, SPLIT_JOB, 7))
+    assert r.named("POST /api/clip/split") == []
+    assert multipart_fields(r.named("sendVideo")[0])["video"] == b"PLAINDATA"
+
+
+def test_start_with_split_remembers_it_per_job(rig):
+    rig.routes["GET /api/slot-uploads"] = httpx.Response(200, json=LIB)
+    rig.routes["POST /api/process"] = httpx.Response(200, json={"job_id": "j-split"})
+    run(rig.bot.handle_update(msg("https://youtu.be/abc")))
+    press(rig, "s:fmt:square", "s:spl:on", f"sp:{LIB_ID}", "s:pos:top", "go")
+    assert form(rig.named("POST /api/process")[0])["output_format"] == "vertical"
+    js = rig.bot.data["job_settings"]["j-split"]
+    assert js["spl"] == "on" and js["src"]["id"] == LIB_ID and js["pos"] == "top"
