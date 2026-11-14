@@ -23,6 +23,12 @@ const store = {
     set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
 };
 
+// Clip length limits, as the API enforces them (clip_selection.py).
+const CLIP_MAX_CEILING = 90;
+const CLIP_MIN_CEILING = CLIP_MAX_CEILING - 5;
+// A length saved when the ceiling was 180 would now be refused by the API.
+const clampSecs = (v, hi) => (v !== '' && Number(v) > hi ? String(hi) : v);
+
 // Duration of a local video file in seconds, or null when the browser cannot
 // read it (unsupported codec): then the server stays the judge.
 const readVideoDuration = (file) => new Promise((resolve) => {
@@ -66,8 +72,8 @@ export default function MediaInput({ onProcess, isProcessing }) {
     // which keeps the default pipeline behavior untouched.
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [targetClips, setTargetClips] = useState(() => store.get('os_target_clips', ''));
-    const [clipMinSeconds, setClipMinSeconds] = useState(() => store.get('os_clip_min', ''));
-    const [clipMaxSeconds, setClipMaxSeconds] = useState(() => store.get('os_clip_max', ''));
+    const [clipMinSeconds, setClipMinSeconds] = useState(() => clampSecs(store.get('os_clip_min', ''), CLIP_MIN_CEILING));
+    const [clipMaxSeconds, setClipMaxSeconds] = useState(() => clampSecs(store.get('os_clip_max', ''), CLIP_MAX_CEILING));
     // Auto-hook: burn the AI hook text into every clip. On by default; the
     // choice persists so turning it off sticks across sessions.
     const [autoHook, setAutoHook] = useState(() => {
@@ -362,17 +368,17 @@ export default function MediaInput({ onProcess, isProcessing }) {
                             <div>
                                 <p className="eyebrow mb-1.5">min length (s)</p>
                                 <input
-                                    type="number" min="5" max="175" step="1"
+                                    type="number" min="5" max={CLIP_MIN_CEILING} step="1"
                                     value={clipMinSeconds}
                                     onChange={(e) => setClipMinSeconds(e.target.value)}
-                                    placeholder="15"
+                                    placeholder="30"
                                     className="input-field"
                                 />
                             </div>
                             <div>
                                 <p className="eyebrow mb-1.5">max length (s)</p>
                                 <input
-                                    type="number" min="10" max="180" step="1"
+                                    type="number" min="10" max={CLIP_MAX_CEILING} step="1"
                                     value={clipMaxSeconds}
                                     onChange={(e) => setClipMaxSeconds(e.target.value)}
                                     placeholder="60"
