@@ -34,7 +34,7 @@ pip install pytest pillow httpx pydantic sqlalchemy greenlet numpy opencv-python
 
 ## Pipeline
 
-Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detection → Gemini picks moments (15-60 s) → FFmpeg cut → vertical reframing → effects/subtitles → hook overlay → optional ElevenLabs dubbing → S3/R2 backup → optional social posting via Upload-Post.
+Ingest (yt-dlp or upload) → transcription (word timestamps) → scene detection → the LLM picks moments (30-60 s by default, up to 90 s) → FFmpeg cut → vertical reframing → effects/subtitles → hook overlay → optional ElevenLabs dubbing → S3/R2 backup → optional social posting via Upload-Post.
 
 ## Key Files
 
