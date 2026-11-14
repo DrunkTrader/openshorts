@@ -1331,8 +1331,9 @@ def _recover_jobs_from_disk():
                 with open(owner_path) as f:
                     raw = f.read().strip()
                 owner = int(raw) if raw.isdigit() else (raw or None)
+            cancelled = os.path.exists(os.path.join(job_path, _CANCELLED_FILE))
             jobs[job_id] = {
-                'status': 'completed',
+                'status': 'cancelled' if cancelled else 'completed',
                 'logs': _TimedLog(["♻️ Job recovered from disk after server restart."]),
                 'output_dir': job_path,
                 'user_id': owner,
@@ -2022,6 +2023,11 @@ async def process_queue():
             # Wait for a job (priority, seq, job_id) — lowest priority first.
             _priority, _seq, job_id = await job_queue.get()
 
+            if _is_cancelled(job_id):
+                # Cancelled while waiting in line: it never starts.
+                job_queue.task_done()
+                continue
+
             if _draining:
                 # Leave it on disk for the next instance (manifest, no heartbeat).
                 print(f"⏸️ Draining — leaving {job_id} for the next instance.")
@@ -2031,7 +2037,7 @@ async def process_queue():
             # Acquire semaphore slot (waits if max jobs are running)
             _admitting.add(job_id)
             await concurrency_semaphore.acquire()
-            if _draining:
+            if _draining or _is_cancelled(job_id):
                 _admitting.discard(job_id)
                 concurrency_semaphore.release()
                 job_queue.task_done()
@@ -2040,7 +2046,7 @@ async def process_queue():
             # The old container may still be draining its jobs on this GPU.
             await _wait_for_shared_gpu()
             _admitting.discard(job_id)
-            if _draining:
+            if _draining or _is_cancelled(job_id):
                 concurrency_semaphore.release()
                 job_queue.task_done()
                 print(f"⏸️ Draining — leaving {job_id} for the next instance.")
@@ -2126,7 +2132,7 @@ async def run_job_wrapper(job_id):
     except Exception as e:
          print(f"❌ Job wrapper error {job_id}: {e}")
     finally:
-        if interrupted or (_stopping and job and job.get('status') != 'completed'):
+        if interrupted or (_stopping and job and job.get('status') not in ('completed', 'cancelled')):
             _running_jobs.discard(job_id)
             concurrency_semaphore.release()
             job_queue.task_done()
@@ -2400,8 +2406,8 @@ async def _record_job_alert(job_id):
     if not BILLING_ENABLED:
         return
     job = jobs.get(job_id) or {}
-    if not job.get('user_id'):
-        return  # only track managed jobs
+    if not job.get('user_id') or job.get('status') == 'cancelled':
+        return  # only track managed jobs; a user's cancel is not a failure
     ok = job.get('status') == 'completed'
     err = "" if ok else _job_error_text(job.get('logs', []))
     try:
@@ -3203,8 +3209,11 @@ async def run_job(job_id, job_data):
         # The daily paid-proxy budget ran out while this job was queued.
         env.pop("PROXY_URL", None)
     output_dir = job_data['output_dir']
+    if job_data.get('cancel_requested'):
+        return  # cancelled between the dispatch and here: never started
     
     jobs[job_id]['status'] = 'processing'
+    jobs[job_id]['started_at'] = time.time()
     jobs[job_id]['logs'].append("Job started by worker.")
     print(f"🎬 [run_job] Executing command for {job_id}: {' '.join(cmd)}")
     
@@ -3217,6 +3226,7 @@ async def run_job(job_id, job_data):
             cwd=os.getcwd(),
             preexec_fn=_lower_priority if os.name != "nt" else None,
         )
+        _job_processes[job_id] = process
         
         # We need to capture logs in a thread because Popen isn't async
         t_log = threading.Thread(target=enqueue_output, args=(process.stdout, job_id))
@@ -3226,7 +3236,12 @@ async def run_job(job_id, job_data):
         # Async wait for process with incremental updates
         start_wait = time.time()
         last_heartbeat = time.time()
+        killed = False
         while process.poll() is None:
+            if job_data.get('cancel_requested') and not killed:
+                # Cancelled before the endpoint could see the process.
+                killed = True
+                await asyncio.get_event_loop().run_in_executor(None, _kill_job_process, process)
             try:
                 await asyncio.sleep(2)
             except asyncio.CancelledError:
@@ -3283,7 +3298,10 @@ async def run_job(job_id, job_data):
                 pass
 
         returncode = process.returncode
-        
+
+        if job_data.get('cancel_requested'):
+            job_data['status'] = 'cancelled'
+            return
         if returncode == 0:
             jobs[job_id]['status'] = 'completed'
             jobs[job_id]['logs'].append("Process finished successfully.")
@@ -3331,10 +3349,129 @@ async def run_job(job_id, job_data):
             jobs[job_id]['logs'].append(_scrub_secrets(f"Process failed with exit code {returncode}"))
             
     except Exception as e:
+        if job_data.get('cancel_requested'):
+            job_data['status'] = 'cancelled'
+            return
         jobs[job_id]['status'] = 'failed'
         # Exception text can embed URLs with credentials (e.g. the proxy URL
         # inside a yt-dlp/httpx error) — scrub before it reaches client logs.
         jobs[job_id]['logs'].append(_scrub_secrets(f"Execution error: {str(e)}"))
+    finally:
+        _job_processes.pop(job_id, None)
+
+
+# --- Cancelling a job -----------------------------------------------------------
+_job_processes: Dict[str, Any] = {}   # job id -> the Popen of its running main.py
+_CANCELLED_FILE = ".cancelled"
+CANCEL_MESSAGE = "Cancelled by the user."
+
+
+def _is_cancelled(job_id) -> bool:
+    return (jobs.get(job_id) or {}).get('status') == 'cancelled'
+
+
+def _descendant_pids(pid):
+    """Every process below ``pid`` (POSIX ``ps``), children first."""
+    try:
+        out = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "ppid="],
+                             capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return []
+    children = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            children.setdefault(int(parts[1]), []).append(int(parts[0]))
+    found, todo = [], [pid]
+    while todo:
+        for child in children.get(todo.pop(), []):
+            if child not in found:
+                found.append(child)
+                todo.append(child)
+    return found
+
+
+def _kill_job_process(process):
+    """Stop a job's main.py and what it started (ffmpeg, yt-dlp). The child
+    shares the API's process group (Ctrl-C and the drain rely on that), so the
+    tree is walked instead of killing a group."""
+    if os.name == "nt":
+        with suppress(Exception):
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                           capture_output=True, timeout=30)
+        with suppress(Exception):
+            process.kill()
+        return
+    tree = _descendant_pids(process.pid)  # before they lose their parent
+    with suppress(Exception):
+        process.kill()
+    # shortcut: a child started between the snapshot and the kill survives; fine for a user cancel.
+    for pid in tree:
+        with suppress(ProcessLookupError, PermissionError):
+            os.kill(pid, signal.SIGKILL)
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str, request: Request):
+    """Cancel a queued or running job. Unlike a drain, it is final: the resume
+    manifest goes, the reservation is released, and it is never resumed."""
+    job = jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    await _assert_job_owner(request, job)
+    status = job.get('status')
+    if status not in ('queued', 'processing'):
+        raise HTTPException(status_code=409, detail=f"This job is already {status}: nothing to cancel.")
+    job['cancel_requested'] = True
+    job['status'] = 'cancelled'
+    job['logs'].append(CANCEL_MESSAGE)
+    _clear_resume_manifest(job_id)
+    with suppress(OSError):
+        open(os.path.join(OUTPUT_DIR, job_id, _CANCELLED_FILE), "w").close()
+    if status == 'queued':
+        # The worker skips it on dequeue; nothing else will settle it.
+        await _settle_reservation(job_id, job)
+        await _notify_job_webhook(job_id)
+    else:
+        # run_job sees the exit and keeps 'cancelled'; its wrapper settles the
+        # reservation and frees the slot as for any finished job.
+        process = _job_processes.get(job_id)
+        if process is not None and process.poll() is None:
+            await asyncio.get_event_loop().run_in_executor(None, _kill_job_process, process)
+    return {"job_id": job_id, "status": "cancelled"}
+
+
+def _job_source_label(job):
+    """The link of a URL job, or the uploaded file's name."""
+    url = _job_source_url(job)
+    if url:
+        return url
+    cmd = list((job or {}).get('cmd') or [])
+    for i, arg in enumerate(cmd[:-1]):
+        if arg in ('-i', '--input'):
+            return os.path.basename(str(cmd[i + 1])).split("_", 1)[-1]
+    return None
+
+
+@app.get("/api/jobs/active")
+async def active_jobs(request: Request):
+    """The caller's queued and processing jobs (self-host: all of them)."""
+    owner = await _owner_id(request)
+    if BILLING_ENABLED and owner is None:
+        raise HTTPException(status_code=401, detail="Sign in to list your jobs")
+    out = []
+    for job_id, job in list(jobs.items()):
+        if job.get('status') not in ('queued', 'processing'):
+            continue
+        if BILLING_ENABLED and str(job.get('user_id')) != str(owner):
+            continue
+        logs = _visible_logs_timed(job.get('logs') or [])[0]
+        out.append({"job_id": job_id, "status": job['status'],
+                    "position": (queue_snapshot(job_id) or {}).get('position'),
+                    "stage": str(logs[-1])[:200] if logs else None,
+                    "source": _job_source_label(job), "started_at": job.get('started_at')})
+    return {"jobs": out}
+
 
 @app.get("/health")
 async def health():
