@@ -115,7 +115,7 @@ def new_subscriber_label(status: str):
 # first N minutes (N = what they have left) so they see clips before paying:
 # 93 of the 99 walls sampled to 16-sep-2026 were shown to accounts with their
 # 20 free minutes untouched, pasting a 21-90 min video, and most left Stripe
-# without paying. Below this many minutes the slice cannot hold a few 15-60 s
+# without paying. Below this many minutes the slice cannot hold a few 30-60 s
 # clips, so the wall stays as it was.
 PARTIAL_MIN_MINUTES = 5
 

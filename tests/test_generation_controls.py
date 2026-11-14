@@ -19,8 +19,8 @@ def _clean_env(monkeypatch):
 
 
 class TestClipDurationBounds:
-    def test_defaults_are_the_classic_band(self):
-        assert clip_selection.clip_duration_bounds() == (15.0, 60.0)
+    def test_defaults_are_30_to_60(self):
+        assert clip_selection.clip_duration_bounds() == (30.0, 60.0)
 
     def test_env_overrides_apply(self, monkeypatch):
         monkeypatch.setenv("CLIP_MIN_SECONDS", "20")
@@ -30,7 +30,17 @@ class TestClipDurationBounds:
     def test_clamped_to_platform_limits(self, monkeypatch):
         monkeypatch.setenv("CLIP_MIN_SECONDS", "1")
         monkeypatch.setenv("CLIP_MAX_SECONDS", "9999")
-        assert clip_selection.clip_duration_bounds() == (5.0, 180.0)
+        assert clip_selection.clip_duration_bounds() == (5.0, 90.0)
+
+    def test_max_ceiling_is_90(self, monkeypatch):
+        monkeypatch.setenv("CLIP_MIN_SECONDS", "120")
+        monkeypatch.setenv("CLIP_MAX_SECONDS", "180")
+        assert clip_selection.clip_duration_bounds() == (85.0, 90.0)
+
+    def test_short_max_alone_lowers_the_default_min(self, monkeypatch):
+        # max 20 with no min asked for: 15-20, not the default 30 widened to 35.
+        monkeypatch.setenv("CLIP_MAX_SECONDS", "20")
+        assert clip_selection.clip_duration_bounds() == (15.0, 20.0)
 
     def test_degenerate_band_keeps_a_real_range(self, monkeypatch):
         # max below min must widen, not invert or collapse.
@@ -42,7 +52,7 @@ class TestClipDurationBounds:
     def test_garbage_falls_back_to_defaults(self, monkeypatch):
         monkeypatch.setenv("CLIP_MIN_SECONDS", "garbage")
         monkeypatch.setenv("CLIP_MAX_SECONDS", "")
-        assert clip_selection.clip_duration_bounds() == (15.0, 60.0)
+        assert clip_selection.clip_duration_bounds() == (30.0, 60.0)
 
 
 def _templates():

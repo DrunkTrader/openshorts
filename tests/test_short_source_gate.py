@@ -1,6 +1,6 @@
 """HTTP tests for the too-short-source gate on /api/process.
 
-A 24s YouTube Short cannot yield 15-60s clips: Gemini returns nothing and the
+A 24s YouTube Short cannot yield 30-60s clips: Gemini returns nothing and the
 job dies with "no usable clips" after burning managed minutes (prod 20-ago).
 The gate rejects such sources at submit, on all three ingest paths, with the
 duration probes stubbed at their seams (_probe_youtube_quality for URLs,
@@ -107,3 +107,16 @@ def test_short_thumbnail_session_is_rejected(dirs, monkeypatch):
     # The session's own video stays; only the aborted job dir is cleaned.
     assert os.path.exists(video)
     assert os.listdir(out_root) == []
+
+
+@pytest.mark.parametrize("body, status", [
+    ({"clip_max_seconds": 90}, 200),
+    ({"clip_max_seconds": 91}, 400),
+    ({"clip_min_seconds": 86}, 400),
+    ({"clip_min_seconds": 30, "clip_max_seconds": 32}, 400),
+])
+def test_clip_length_ceiling_is_90s(dirs, monkeypatch, body, status):
+    _stub_probe(monkeypatch, duration=600)
+    resp = _post_process({"url": "https://www.youtube.com/watch?v=ok",
+                          "acknowledged": True, **body})
+    assert resp.status_code == status, resp.text

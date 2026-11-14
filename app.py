@@ -69,7 +69,7 @@ UPLOADS_MAX_GB = int(os.environ.get("UPLOADS_MAX_GB", "15"))
 # height (0 disables). Only applies to URLs; uploads are whatever the user gave.
 QUALITY_GATE_MIN_HEIGHT = int(os.environ.get("QUALITY_GATE_MIN_HEIGHT", "720"))
 # Reject sources shorter than this before starting (0 disables). A 24s YouTube
-# Short cannot yield 15-60s clips: Gemini returns nothing, the job burns
+# Short cannot yield 30-60s clips: Gemini returns nothing, the job burns
 # managed minutes and dies with "no usable clips" (prod 20-ago: 3 of 5 recent
 # failures were exactly this, one user retrying the same 24s video).
 MIN_SOURCE_SECONDS = int(os.environ.get("MIN_SOURCE_SECONDS", "45"))
@@ -496,7 +496,7 @@ def _parse_source_range(start, end):
     return (start, end)
 
 
-# A stretch shorter than this cannot hold a few 15-60 s clips.
+# A stretch shorter than this cannot hold a 30-60 s clip or two.
 MIN_RANGE_SECONDS = 60
 
 # URL probes made for the dashboard's cost line, reused by /api/process when
@@ -3880,11 +3880,14 @@ async def process_endpoint(
         return int(val) if integer else val
 
     n_clips = _gen_control(target_clips, "target_clips", 1, 15, integer=True)
-    min_secs = _gen_control(clip_min_seconds, "clip_min_seconds", 5, 175)
-    max_secs = _gen_control(clip_max_seconds, "clip_max_seconds", 10, 180)
-    if min_secs is not None and max_secs is not None and max_secs < min_secs + 5:
+    from clip_selection import CLIP_BAND_GAP, CLIP_MAX_CEILING, CLIP_MIN_FLOOR
+    min_secs = _gen_control(clip_min_seconds, "clip_min_seconds",
+                            CLIP_MIN_FLOOR, CLIP_MAX_CEILING - CLIP_BAND_GAP)
+    max_secs = _gen_control(clip_max_seconds, "clip_max_seconds",
+                            CLIP_MIN_FLOOR + CLIP_BAND_GAP, CLIP_MAX_CEILING)
+    if min_secs is not None and max_secs is not None and max_secs < min_secs + CLIP_BAND_GAP:
         raise HTTPException(status_code=400,
-                            detail="clip_max_seconds must be at least 5s above clip_min_seconds")
+                            detail=f"clip_max_seconds must be at least {CLIP_BAND_GAP:g}s above clip_min_seconds")
     if n_clips is not None:
         env["CLIP_TARGET_MIN"] = env["CLIP_TARGET_MAX"] = str(n_clips)
     if min_secs is not None:

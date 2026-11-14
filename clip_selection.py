@@ -201,10 +201,19 @@ def vision_segments(video_duration, segment_seconds, max_segments):
             for i in range(n_kept)]
 
 
+# The clip length band: the defaults when the user asks for nothing, and the
+# limits a user may ask for (API, MCP and dashboard validate against these).
+CLIP_MIN_DEFAULT = 30.0
+CLIP_MAX_DEFAULT = 60.0
+CLIP_MIN_FLOOR = 5.0
+CLIP_MAX_CEILING = 90.0
+CLIP_BAND_GAP = 5.0  # max is always at least this far above min
+
+
 def clip_duration_bounds():
     """The clip length band (seconds) the selection prompts and word-snapping
-    enforce. ``CLIP_MIN_SECONDS`` / ``CLIP_MAX_SECONDS`` override the classic
-    15-60 — set per job by /api/process when the user asks for a specific
+    enforce. ``CLIP_MIN_SECONDS`` / ``CLIP_MAX_SECONDS`` override the default
+    30-60 — set per job by /api/process when the user asks for a specific
     length, or by hand for A/B runs. Values are clamped to platform-sane
     limits and re-ordered so bad input degrades instead of breaking the job.
     """
@@ -216,12 +225,14 @@ def clip_duration_bounds():
         except ValueError:
             return default
 
-    lo = _read("CLIP_MIN_SECONDS", 15.0)
-    hi = _read("CLIP_MAX_SECONDS", 60.0)
-    lo = min(max(lo, 5.0), 175.0)
-    hi = min(max(hi, 10.0), 180.0)
-    if hi < lo + 5.0:  # keep a real band: degenerate ranges starve the model
-        hi = min(180.0, lo + 5.0)
+    hi = _read("CLIP_MAX_SECONDS", CLIP_MAX_DEFAULT)
+    hi = min(max(hi, CLIP_MIN_FLOOR + CLIP_BAND_GAP), CLIP_MAX_CEILING)
+    lo = _read("CLIP_MIN_SECONDS", None)
+    if lo is None:  # only a max was asked for: the default min yields to it
+        lo = min(CLIP_MIN_DEFAULT, hi - CLIP_BAND_GAP)
+    lo = min(max(lo, CLIP_MIN_FLOOR), CLIP_MAX_CEILING - CLIP_BAND_GAP)
+    if hi < lo + CLIP_BAND_GAP:  # keep a real band: degenerate ranges starve the model
+        hi = min(CLIP_MAX_CEILING, lo + CLIP_BAND_GAP)
     return round(lo, 3), round(hi, 3)
 
 
@@ -605,7 +616,7 @@ def dedupe_overlapping(shorts, ratio=0.25):
 
 
 def snap_clip_to_words(start, end, words, video_duration,
-                       min_duration=15.0, max_duration=60.0,
+                       min_duration=CLIP_MIN_DEFAULT, max_duration=CLIP_MAX_DEFAULT,
                        search_window=1.5, max_lead=0.35, max_tail=0.45):
     """
     Snap Gemini-proposed clip boundaries onto real word boundaries plus a bit

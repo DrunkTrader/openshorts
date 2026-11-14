@@ -143,12 +143,12 @@ TOOLS = [
                                    "Default: the AI decides (usually 2-6).",
                 },
                 "clip_min_seconds": {
-                    "type": "number", "minimum": 5, "maximum": 175,
-                    "description": "Minimum clip length in seconds (default 15).",
+                    "type": "number", "minimum": 5, "maximum": 85,
+                    "description": "Minimum clip length in seconds (default 30).",
                 },
                 "clip_max_seconds": {
-                    "type": "number", "minimum": 10, "maximum": 180,
-                    "description": "Maximum clip length in seconds (default 60). Must be ≥ 5s above the minimum.",
+                    "type": "number", "minimum": 10, "maximum": 90,
+                    "description": "Maximum clip length in seconds (default 60, at most 90). Must be ≥ 5s above the minimum.",
                 },
             },
             "required": ["confirm_rights"],

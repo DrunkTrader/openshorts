@@ -67,7 +67,7 @@ class TestSnapClipToWords:
     def test_start_snaps_into_silence_before_word(self):
         words = self._words()
         # Gemini proposes 10.3 — nearest word start is 10.0, gap before is 9.6->10.0
-        start, end = snap_clip_to_words(10.3, 30.1, words, 80.0)
+        start, end = snap_clip_to_words(10.3, 30.1, words, 80.0, min_duration=15.0)
         assert 9.8 <= start <= 10.0  # word start minus half-gap lead
         # end 30.1 -> nearest word end 29.6 plus tail
         assert 29.6 <= end <= 30.05
@@ -82,8 +82,13 @@ class TestSnapClipToWords:
     def test_duration_repaired_to_minimum(self):
         words = self._words()
         # snapping would yield ~14.4s; must be extended to >= 15s on a word end
-        start, end = snap_clip_to_words(10.0, 24.5, words, 80.0)
+        start, end = snap_clip_to_words(10.0, 24.5, words, 80.0, min_duration=15.0)
         assert end - start >= 15.0
+
+    def test_default_minimum_is_30s(self):
+        words = self._words()
+        start, end = snap_clip_to_words(10.0, 24.5, words, 80.0)
+        assert end - start >= 30.0
 
     def test_duration_capped_at_maximum(self):
         words = self._words()
