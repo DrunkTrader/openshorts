@@ -1,0 +1,22 @@
+# Self-hosted n8n for the Telegram approval -> Drive -> YouTube workflow.
+# Usage: cp .env.example .env, fill it in, then `docker compose up -d`.
+services:
+  n8n:
+    image: n8nio/n8n:2.47.7
+    restart: unless-stopped
+    ports:
+      # Loopback only: reach the UI through an SSH tunnel or Tailscale.
+      - "127.0.0.1:5678:5678"
+    environment:
+      GENERIC_TIMEZONE: ${GENERIC_TIMEZONE:-UTC}
+      TZ: ${GENERIC_TIMEZONE:-UTC}
+      N8N_SECURE_COOKIE: "false"
+      WEBHOOK_URL: http://127.0.0.1:5678/
+      OPENSHORTS_WEBHOOK_SECRET: ${OPENSHORTS_WEBHOOK_SECRET:?set OPENSHORTS_WEBHOOK_SECRET in .env}
+      # The secret-check Code node reads $env.OPENSHORTS_WEBHOOK_SECRET.
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+volumes:
+  n8n_data:

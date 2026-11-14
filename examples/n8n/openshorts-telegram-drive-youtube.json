@@ -1,0 +1,388 @@
+{
+  "name": "OpenShorts: Telegram approval -> Drive -> YouTube",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Telegram approval -> Drive -> YouTube\n\nOpenShorts' Telegram bot POSTs an approved clip here (multipart: `video`, `title`, `description`, `tags`, `privacy`, `job_id`, `clip_index`, header `X-OpenShorts-Secret`).\n\n### Before activating\n1. Set `OPENSHORTS_WEBHOOK_SECRET` in n8n's environment (see `examples/n8n/selfhost`).\n2. Create the credentials **Google Drive account** and **YouTube account** and select them in the two Google nodes.\n3. In **Upload to Drive**, replace `PASTE_YOUR_DRIVE_FOLDER_ID_HERE` with your folder id (the part after `/folders/` in the folder's URL).\n\nEvery reply is JSON: `{ok: true, drive_file_id, drive_link, youtube_video_id, youtube_url}` or `{ok: false, error}`.\n\nYouTube: about 6 uploads a day on the default quota, and an unaudited API project can only publish private videos.",
+        "height": 520,
+        "width": 460
+      },
+      "id": "note-setup",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -620,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "openshorts-youtube-upload",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "Approved clip (webhook)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -80,
+        0
+      ],
+      "webhookId": "8c0f7d1e-5b52-4d0e-9a57-3f7c2b9e6a10"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Secret check and field validation. Keeps the uploaded binary as `video`.\nconst item = $input.first();\nconst headers = item.json.headers || {};\nconst body = item.json.body || {};\n\n// Constant-time compare: walks the longer string whatever the input, and folds\n// the length difference into the result.\nconst given = String(headers['x-openshorts-secret'] || '');\nconst expected = String($env.OPENSHORTS_WEBHOOK_SECRET || '');\nlet diff = given.length ^ expected.length;\nfor (let i = 0; i < Math.max(given.length, expected.length); i++) {\n  diff |= (given.charCodeAt(i) || 0) ^ (expected.charCodeAt(i) || 0);\n}\nif (!expected || diff !== 0) {\n  return [{ json: { route: 'unauthorized', error: 'unauthorized' } }];\n}\n\nconst invalid = (error) => [{ json: { route: 'invalid', error } }];\nconst video = item.binary && item.binary.video;\nif (!video) return invalid('missing video file');\n\nconst title = String(body.title || '').trim();\nconst description = String(body.description || '');\nconst privacy = String(body.privacy || '').trim();\nconst jobId = String(body.job_id || '').trim();\nconst clipIndex = String(body.clip_index ?? '').trim();\nconst tags = String(body.tags || '').split(',').map((t) => t.trim()).filter(Boolean);\n\nif (!title) return invalid('title is empty');\nif (title.length > 100) return invalid('title over 100 characters');\nif (description.length > 5000) return invalid('description over 5000 characters');\nif (!['private', 'unlisted', 'public'].includes(privacy)) return invalid('privacy must be private, unlisted or public');\nif (!/^[A-Za-z0-9_-]{1,128}$/.test(jobId)) return invalid('invalid job_id');\nif (!/^\\d{1,4}$/.test(clipIndex)) return invalid('invalid clip_index');\n\nreturn [{\n  json: {\n    route: 'ok',\n    title,\n    description,\n    privacy,\n    // null, not '', so the YouTube node sends no tags at all when there are none.\n    tags: tags.length ? tags.join(',') : null,\n    filename: `${jobId}_${clipIndex}.mp4`,\n  },\n  binary: { video },\n}];"
+      },
+      "id": "check",
+      "name": "Check secret and validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        140,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "if-auth-c",
+              "leftValue": "={{ $json.route }}",
+              "rightValue": "unauthorized",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-auth",
+      "name": "Unauthorized?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        360,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "if-valid-c",
+              "leftValue": "={{ $json.route }}",
+              "rightValue": "ok",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-valid",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        580,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: false, error: 'unauthorized' } }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "respond-401",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        580,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: false, error: $json.error } }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "respond-400",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        800,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "inputDataFieldName": "video",
+        "name": "={{ $json.filename }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "PASTE_YOUR_DRIVE_FOLDER_ID_HERE"
+        },
+        "options": {
+          "simplifyOutput": false
+        }
+      },
+      "id": "drive-upload",
+      "name": "Upload to Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        800,
+        -200
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: false, error: 'drive upload failed' } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "respond-drive-error",
+      "name": "Respond Drive error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1020,
+        -40
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// The Drive node returns metadata only: hand the YouTube node the clip again.\nconst drive = $input.first().json;\nconst id = drive.id;\nreturn [{\n  json: {\n    ...$('Check secret and validate').first().json,\n    drive_file_id: id,\n    drive_link: drive.webViewLink || `https://drive.google.com/file/d/${id}/view`,\n  },\n  binary: $('Check secret and validate').first().binary,\n}];"
+      },
+      "id": "reattach",
+      "name": "Attach clip again",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1020,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "video",
+        "operation": "upload",
+        "title": "={{ $json.title }}",
+        "regionCode": "US",
+        "categoryId": "22",
+        "binaryProperty": "video",
+        "options": {
+          "description": "={{ $json.description }}",
+          "tags": "={{ $json.tags }}",
+          "privacyStatus": "={{ $json.privacy }}",
+          "selfDeclaredMadeForKids": false
+        }
+      },
+      "id": "youtube-upload",
+      "name": "Upload to YouTube",
+      "type": "n8n-nodes-base.youTube",
+      "typeVersion": 1,
+      "position": [
+        1240,
+        -240
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "name": "YouTube account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, drive_file_id: $('Attach clip again').first().json.drive_file_id, drive_link: $('Attach clip again').first().json.drive_link, youtube_video_id: $json.uploadId, youtube_url: 'https://www.youtube.com/watch?v=' + $json.uploadId } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "respond-ok",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1460,
+        -320
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: false, error: 'youtube upload failed', drive_file_id: $('Attach clip again').first().json.drive_file_id, drive_link: $('Attach clip again').first().json.drive_link } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "respond-youtube-error",
+      "name": "Respond YouTube error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1460,
+        -140
+      ]
+    }
+  ],
+  "connections": {
+    "Approved clip (webhook)": {
+      "main": [
+        [
+          {
+            "node": "Check secret and validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check secret and validate": {
+      "main": [
+        [
+          {
+            "node": "Unauthorized?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Unauthorized?": {
+      "main": [
+        [
+          {
+            "node": "Respond 401",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Upload to Drive",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to Drive": {
+      "main": [
+        [
+          {
+            "node": "Attach clip again",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Drive error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach clip again": {
+      "main": [
+        [
+          {
+            "node": "Upload to YouTube",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to YouTube": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond YouTube error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "active": false
+}

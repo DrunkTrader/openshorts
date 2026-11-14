@@ -1,7 +1,7 @@
 # OpenShorts + n8n
 
-Two importable workflows, from a one-shot clipper to a full channel autopilot.
-Both work out of the box with [OpenShorts Cloud](https://www.openshorts.app/)
+Importable workflows, from a one-shot clipper to a full channel autopilot.
+The first two work out of the box with [OpenShorts Cloud](https://www.openshorts.app/)
 (free tier: 20 min of video, paid plans from $12/mo). OpenShorts is also open
 source: self-hosters can point either workflow at their own instance by
 changing the base URL (needs a GPU box, your own Gemini key, and your own
@@ -11,6 +11,7 @@ changing the base URL (needs a GPU box, your own Gemini key, and your own
 |---|---|---|
 | `openshorts-clip-and-notify.json` | A video URL goes in through a form, clips come back on a signed webhook. No polling. | OpenShorts API key |
 | `openshorts-content-machine.json` | Your YouTube channel on autopilot: daily clipping, approval buttons in Telegram, drip-scheduled posting, weekly analytics digest. | OpenShorts API key + Telegram bot |
+| `openshorts-telegram-drive-youtube.json` | Self-host: a clip approved in the OpenShorts Telegram bot goes to Google Drive, then YouTube ([setup](#self-host-telegram-approval--drive--youtube)). | Google Drive + YouTube OAuth |
 
 ## Shared setup
 
@@ -102,3 +103,102 @@ Analytics of what you published: `GET /api/social/analytics` (profile totals),
 Full API reference: [api.openshorts.app/docs](https://api.openshorts.app/docs).
 Agent-native version of the same pipeline (MCP):
 [openshorts.app/mcp](https://www.openshorts.app/mcp).
+
+## Self-host: Telegram approval → Drive → YouTube
+
+`openshorts-telegram-drive-youtube.json` receives a clip you approved in the
+OpenShorts Telegram bot, stores it in a Google Drive folder, uploads it to
+YouTube, and answers the bot with both links:
+
+```json
+{ "ok": true, "drive_file_id": "…", "drive_link": "…", "youtube_video_id": "…", "youtube_url": "…" }
+```
+
+Any failure answers `{ "ok": false, "error": "<short reason>" }`: 401 for a
+wrong secret, 400 for a bad field, 200 when Drive or YouTube refuses the upload.
+
+### 1. Start n8n
+
+```bash
+cd examples/n8n/selfhost
+cp .env.example .env
+python -c "import secrets;print(secrets.token_urlsafe(32))"   # paste as OPENSHORTS_WEBHOOK_SECRET
+docker compose up -d
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5678/healthz   # 200
+```
+
+n8n listens on `127.0.0.1:5678` only. Keep it that way. To use the UI from
+another device, either:
+
+- open an SSH tunnel, then browse to `http://localhost:5678`:
+  `ssh -L 5678:127.0.0.1:5678 <you>@<server>`
+- or publish it to your tailnet only with `tailscale serve --bg 5678`, which
+  proxies to the loopback port without opening it to the network.
+
+Do the Google sign-in steps below through the SSH tunnel: n8n's OAuth
+callback is `http://localhost:5678/...`, which Google accepts without a
+public domain.
+
+Import the workflow (**Workflows → Import from file**, or
+`docker compose exec n8n n8n import:workflow --input=<file>` after copying it
+into the container).
+
+### 2. Google Cloud (free)
+
+1. In the [Google Cloud console](https://console.cloud.google.com/), create a
+   project.
+2. **APIs & Services → Library**: enable **YouTube Data API v3** and
+   **Google Drive API**.
+3. **OAuth consent screen**: user type **External**, publishing status
+   **Testing**, and add your own Google account under **Test users**.
+4. **Credentials → Create credentials → OAuth client ID**, type **Web
+   application**. Under **Authorized redirect URIs**, paste the
+   **OAuth Redirect URL** that n8n shows in the credential dialog (step 3
+   below), normally `http://localhost:5678/rest/oauth2-credential/callback`.
+   Keep the client id and secret.
+
+### 3. n8n credentials
+
+Create two credentials with these exact names (the workflow refers to them by
+name), each with the client id and secret above, then **Sign in with Google**:
+
+- **Google Drive account** (type *Google Drive OAuth2 API*)
+- **YouTube account** (type *YouTube OAuth2 API*)
+
+Open **Upload to Drive** and **Upload to YouTube** once and check the
+credential is selected.
+
+### 4. Folder, activation, OpenShorts
+
+1. In **Upload to Drive**, replace `PASTE_YOUR_DRIVE_FOLDER_ID_HERE` with the
+   folder id (what follows `/folders/` in the folder's URL). Files are named
+   `<job_id>_<clip_index>.mp4`.
+2. Activate (publish) the workflow.
+3. In OpenShorts' `.env`:
+
+   ```
+   N8N_WEBHOOK_SECRET=<the same value as OPENSHORTS_WEBHOOK_SECRET>
+   N8N_UPLOAD_WEBHOOK_URL=http://127.0.0.1:5678/webhook/openshorts-youtube-upload
+   ```
+
+   If OpenShorts itself runs in Docker, `127.0.0.1` is its own container: use
+   an address that container can reach instead.
+
+The secret travels in the `X-OpenShorts-Secret` header and is compared in
+constant time; the `Check secret and validate` node reads it from n8n's
+environment (hence `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` in the compose file).
+
+### YouTube limits
+
+- **Quota**: an upload (`videos.insert`) costs 1,600 of the default 10,000
+  daily units, so about **6 uploads a day**
+  ([quota costs](https://developers.google.com/youtube/v3/determine_quota_cost)).
+  A higher quota needs an extension request to Google.
+- **Private until audited**: videos uploaded through an API project that has
+  not passed YouTube's API compliance audit are locked to **private**, whatever
+  `privacy` says. The audit is free; see the note on
+  [`videos.insert`](https://developers.google.com/youtube/v3/docs/videos/insert)
+  and the [audit and quota extension form](https://support.google.com/youtube/contact/yt_api_form).
+- While the consent screen stays in **Testing**, Google expires the refresh
+  token after 7 days: reconnect the two credentials when uploads start failing
+  with an auth error.
